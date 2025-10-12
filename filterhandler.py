@@ -9,5 +9,5 @@ class FilteringHandler(logging.Handler):
         self.target = target
 
     def emit(self, record: logging.LogRecord) -> None:
-        if not record.getMessage().startswith("*** | ***"):
+        if not "*** | ***" in record.getMessage():
             self.target.emit(record)

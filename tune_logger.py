@@ -4,6 +4,7 @@ from enum import Enum
 import sys
 
 from accumulate_not_procesed_vidops import AccumulateNotProcessedVidops
+from filterhandler import FilteringHandler
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,9 @@ class TuneLogger:
         # Настройка уровней логирования
         self.handlers_logger[HandlerLogger.file].setLevel(file_log_level)
         self.handlers_logger[HandlerLogger.console].setLevel(log_level_console)
+        self.handlers_logger[HandlerLogger.not_processed_vidops].setLevel(
+            logging.NOTSET
+        )
 
         self.configure_root_handlers(handlers)
 
@@ -81,8 +85,13 @@ class TuneLogger:
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.DEBUG)
 
-        for handler in handlers:
-            root_logger.addHandler(handler)
+        root_logger.addHandler(
+            FilteringHandler(self.handlers_logger[HandlerLogger.file])
+        )
+        root_logger.addHandler(
+            FilteringHandler(self.handlers_logger[HandlerLogger.console])
+        )
+        root_logger.addHandler(self.handlers_logger[HandlerLogger.not_processed_vidops])
 
     @staticmethod
     def _remove_loging() -> None:

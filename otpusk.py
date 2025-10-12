@@ -117,7 +117,7 @@ class Otpusk:
         for uchrabvr in self.person_uchrabvr:
             status = self.person_status.get(uchrabvr.nrec)
             if not status:
-                self.error(uchrabvr.tabn, TEXT_ERROR[4].format(vidop=uchrabvr.vidop))
+                self.error("*** | ***", TEXT_ERROR[4].format(vidop=uchrabvr.vidop))
 
     def update_uchrabvr(
         self, uchrabvr: Uchrabvr, primary_vidops: str | tuple[str, ...]
@@ -222,16 +222,16 @@ class Otpusk:
         all_vidops_str_sorted = (str(vidop) for vidop in sorted(all_vidops_primary))
         logging.critical(
             f"\n1. Вызовите Систему Галактика"
-            f"\n2. Выполните Заработная плата | Настройка | Сервисные функции | Перерасчет средних"
+            f"\n2. Выполните --> Заработная плата | Настройка | Сервисные функции | Перерасчет средних"
             f"\n3. Выполните предварительную разноску"
             f"\n4. Выполните bat файл select_razn.bat"
-            f"\n5. В окне этой программы нажмимте клавишу Enter и дождитесь завершения программы"
+            f"\n5. В окне этой программы нажмимте клавишу Enter и дождитесь завершения работы программы"
             f"\n6. Выполните bat файл update_razn.bat"
             f"\n7. Установите алгоритм 2 у следующих видов оплаты {', '.join(all_vidops_str_sorted)}"
             f"\n8. Вызовите расчёт зарплаты, НЕ ставьте галочку 'Предварительная разноска'"
             f"\n9. После расчёта зарплаты, верните прежние значения алгоритмов."
         )
-        # input("Для продолжения работы нажмите клавишу Enter")
+        input("Для продолжения работы нажмите клавишу Enter")
 
     def stop(self):
         logging.shutdown()
