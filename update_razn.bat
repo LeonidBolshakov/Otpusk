@@ -1,0 +1,1 @@
+c:\GalaktikaCorp\gal91\exe\asql.exe update.lot /c:galaktika.cfg
