@@ -14,5 +14,5 @@ from
 where
      POMETKA='èë'
 order by CLSCH    
-to txt c:\2_otpusk\UCHRABVR.txt
+to txt UCHRABVR.txt
 ;    

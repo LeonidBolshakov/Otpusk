@@ -3,26 +3,30 @@
 -----------------------
 Автор: Л. А. Большаков, 2025
 
-Описание:
-    Модуль содержит класс AccumulateVidops, предназначенный для накопления
-    уникальных vidop из сообщений системы логирования Python.
-    Класс можно использовать как пользовательский
-    обработчик (Handler) для стандартного модуля logging.
+Назначение:
+    Класс AccumulateVidops накапливает уникальные значения «vidop» из сообщений
+    стандартного модуля logging. Используется как пользовательский обработчик (Handler).
 
-    Принцип работы:
-    - Класс принимает строку `service_text`, которая служит маркером-разделителем.
-    - При получении лог-сообщения он ищет в нём этот маркер.
-    - Предполагается, что после маркера следует vidop. Он извлекается и сохраняется в множестве.
-    - Таким образом, накапливается набор уникальных vidop-значений.
+Как работает:
+    • В сообщении ищется маркер `service_text`.
+    • Всё, что расположено после маркера, трактуется как «vidop», приводится к str.strip()
+      и сохраняется во множестве `accumulate`.
+    • Обработчик не передаёт запись дальше по цепочке (терминальная ветка).
 
-Пример использования:
+Ограничения:
+    • Извлечение выполняется по первому вхождению `service_text`; если маркер встречается
+      несколько раз, учитывается часть строки после первого вхождения.
+    • «Vidop» берётся «как есть» до конца сообщения; если нужно обрезать по разделителям
+      (пробел, «;», «,» и пр.), эту логику следует добавить здесь.
+
+Пример:
     >>> import logging
-    >>> logger = logging.getLogger()
-    >>> handler = AccumulateVidops(service_text="VIDOP:")
-    >>> logger.addHandler(handler)
-    >>> logger.warning("System event VIDOP:1234")
-    >>> logger.warning("System event VIDOP:5678")
-    >>> print(handler.output_accumulate())
+    >>> h = AccumulateVidops(service_text="VIDOP:")
+    >>> root = logging.getLogger()
+    >>> root.addHandler(h)
+    >>> root.warning("System event VIDOP:1234")
+    >>> root.warning("System event VIDOP:5678")
+    >>> h.output_accumulate()
     {'1234', '5678'}
 """
 
@@ -54,34 +58,23 @@ class AccumulateVidops(logging.Handler):
         """
         super().__init__()
         self.service_text = service_text
-        # Используем множество для исключения дубликатов vidop-значений
         self.accumulate: set[str] = set()
 
     def emit(self, record: logging.LogRecord) -> None:
         """
-        Обрабатывает запись лога и сохраняет найденное vidop-значение.
+        Обрабатывает запись лога: если `service_text` найден, извлекает часть
+        после маркера, выполняет strip() и добавляет в множество.
 
-        Args:
-            record (logging.LogRecord): Объект лог-записи.
-
-        Принцип:
-            Если в сообщении содержится `service_text`,
-            то извлекается часть строки после него,
-            очищается от пробелов и добавляется в множество.
-            На дальнейшую обработку сообщение не отправляется.
+        Примечание:
+            Запись не передаётся дальше по цепочке обработчиков.
         """
         message = record.getMessage()
         if self.service_text in message:
             # Извлекаем часть строки после service_text
-            vidop = message.split(self.service_text)[1]
+            _, _, vidop = message.partition(self.service_text)
             # Добавляем очищенное значение в множество
             self.accumulate.add(vidop.strip())
 
     def output_accumulate(self) -> set[str]:
-        """
-        Возвращает множество всех накопленных vidop-значений.
-
-        Returns:
-            Уникальные vidop-значения, найденные в логах.
-        """
+        """Возвращает множество всех накопленных vidop-значений."""
         return self.accumulate

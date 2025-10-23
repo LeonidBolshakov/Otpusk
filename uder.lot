@@ -1,0 +1,14 @@
+select
+     NREC,
+     TABN,
+     MES,
+     VIDUD,
+     SUMUD,
+     CLSCH,
+     DATAV,
+     VIDOPLUD
+from
+     UDER
+order by CLSCH
+to txt UDER.txt
+;   

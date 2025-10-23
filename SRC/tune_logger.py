@@ -1,4 +1,17 @@
-# (с) Л. А. Большаков, 2025
+"""
+(с) Л. А. Большаков, 2025
+TuneLogger: сборка и настройка подсистемы логирования.
+
+Состав:
+    * Преобразование уровней (строка/число → int).
+    * Создание обработчиков: файл, консоль, и `AccumulateVidops` для сбора служебных vidop.
+    * Оборачивание файла/консоли в `FilteringHandler` для исключения сообщений с `service_text`.
+
+Особенности:
+    * Формат лога берётся как есть (из параметров), предварительно интерполяция в INI отключена в `Common`.
+    * Каталог под файл лога создаётся при инициализации (_build_handlers).
+"""
+
 from pathlib import Path
 import logging
 from enum import Enum, auto
@@ -19,6 +32,7 @@ LEVEL_STR_TO_INT = {
 }
 DEFAULT_FILE_LEVEL = logging.INFO
 DEFAULT_CONSOLE_LEVEL = logging.CRITICAL
+DEFAULT_SERVICE_TEXT = "*** | ***"
 # fmt: on
 
 
@@ -27,116 +41,85 @@ class HandlerLogger(Enum):
 
     file = auto()  # Запись логов в файл
     console = auto()  # Вывод логов в консоль
-    not_processed_vidops = auto()  # Сбор необработанных vidop
+    not_processed_vidops = auto()  # Сбор «необработанных» vidop (служебный обработчик)
 
 
 class TuneLogger:
-    """
-    Класс настройки системы логирования приложения.
-
-    Выполняет настройку обработчиков (файл, консоль,
-    накопитель необработанных vidop), и форматирование вывода.
-    """
-
     def __init__(self, parameters: dict[str, Any]):
-        """
-        Инициализация параметров логирования.
-
-        Args:
-            parameters: словарь с параметрами конфигурации. Ключи словаря:
-                - level_console: уровень вывода в консоль (str)
-                - level_file: уровень вывода в файл (str)
-                - service_text: идентификатор сервисного сообщения
-                - file_log_path: путь к файлу лога (str)
-        """
         self.level_errors: list[str] = []
-        # Запоминание значений из словаря параметров
+
+        # 1) Разбор параметров с дефолтами и нормализацией
         self.log_level_console = self.level_str_int(
-            parameters["level_console"], DEFAULT_CONSOLE_LEVEL
+            self._normalize_level(parameters.get("level_console")),
+            DEFAULT_CONSOLE_LEVEL,
         )
         self.log_level_file = self.level_str_int(
-            parameters["level_file"], DEFAULT_FILE_LEVEL
+            self._normalize_level(parameters.get("level_file")), DEFAULT_FILE_LEVEL
         )
-        self.service_text = parameters["service_text"]
+        self.service_text = parameters.get("service_text") or DEFAULT_SERVICE_TEXT
 
-        # Создание объекта для накопления "необработанных" записей
+        self.log_format = (parameters.get("log_format") or "").strip()
+        if not self.log_format:
+            raise ValueError("log_format is required and must be non-empty")
+
+        self.file_log_path = (parameters.get("file_log_path") or "").strip()
+        if not self.file_log_path:
+            raise ValueError("file_log_path is required and must be non-empty")
+
+        # 2) Подготовка вспомогательных объектов
         self.accumulate_vidops = AccumulateVidops(self.service_text)
 
-        # Словарь обработчиков логирования
-        file_log_path = parameters["file_log_path"]
+        # 3) Создание handlers (без присоединения к root)
+        self.handlers_logger: dict[HandlerLogger, logging.Handler] = (
+            self._build_handlers()
+        )
 
-        self.handlers_logger: dict[HandlerLogger, logging.Handler] = {
-            HandlerLogger.file: self.create_file_handler(file_log_path),
-            HandlerLogger.console: logging.StreamHandler(sys.stdout),
+    # === Helpers ===
+    @staticmethod
+    def _normalize_level(level: Any) -> str | None:
+        if level is None:
+            return None
+        if isinstance(level, int):
+            return str(level)
+        return str(level).strip().upper()
+
+    def _build_handlers(self) -> dict[HandlerLogger, logging.Handler]:
+        # гарантируем каталог
+        Path(self.file_log_path).parent.mkdir(parents=True, exist_ok=True)
+
+        file_handler = self.create_file_handler(self.file_log_path)
+        console_handler = logging.StreamHandler(sys.stdout)
+
+        # формат сразу
+        fmt = logging.Formatter(self.log_format)
+        file_handler.setFormatter(fmt)
+        console_handler.setFormatter(fmt)
+
+        file_handler.setLevel(self.log_level_file)
+        console_handler.setLevel(self.log_level_console)
+        self.accumulate_vidops.setLevel(logging.DEBUG)
+
+        return {
+            HandlerLogger.file: file_handler,
+            HandlerLogger.console: console_handler,
             HandlerLogger.not_processed_vidops: self.accumulate_vidops,
         }
 
-        # Формат вывода логов
-        self.log_format = "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
-
     def setup_logging(self) -> None:
-        """Основная точка входа — настройка глобального логирования."""
-        handlers = self.configure_handlers(
-            self.log_format, self.log_level_console, self.log_level_file
-        )
-        # Добавление обработчиков к корневому логгеру
+        handlers = list(self.handlers_logger.values())
         self.configure_root_handlers(handlers)
 
     def create_file_handler(self, file_log_path: str) -> logging.FileHandler:
-        """
-        Создаёт файловый обработчик логов.
-
-        Args:
-            file_log_path: путь к файлу лога
-
-        Returns:
-            logging.FileHandler: настроенный обработчик
-        """
-        p = Path(file_log_path)
-        mode = "w"
+        # Режим "w": файл лога перезаписывается при каждом запуске; encoding без BOM
         return logging.FileHandler(
-            filename=p, mode=mode, encoding="utf-8-sig", delay=True
+            filename=Path(file_log_path), mode="w", encoding="utf-8", delay=True
         )
 
-    def configure_handlers(
-        self, log_format: str, log_level_console: int, log_level_file: int
-    ) -> list[logging.Handler]:
-        """
-        Настраивает все обработчики логов и добавляет их к корневому логгеру.
-
-        Args:
-            log_format: строка формата логов
-            log_level_console: уровень логирования для консоли
-            log_level_file: уровень логирования для файла
-        """
-        handlers = list(self.handlers_logger.values())
-        print(type(self.handlers_logger.values()))
-
-        # Установка форматирования для обработчиков
-        fmt = logging.Formatter(log_format)
-        self.handlers_logger[HandlerLogger.file].setFormatter(fmt)
-        self.handlers_logger[HandlerLogger.console].setFormatter(fmt)
-
-        # Присвоение уровней сообщений каждому обработчику
-        self.handlers_logger[HandlerLogger.file].setLevel(log_level_file)
-        self.handlers_logger[HandlerLogger.console].setLevel(log_level_console)
-        self.handlers_logger[HandlerLogger.not_processed_vidops].setLevel(logging.DEBUG)
-
-        return handlers
-
     def configure_root_handlers(self, handlers: list[logging.Handler]) -> None:
-        """
-        Присоединяет обработчики к корневому логгеру приложения.
-
-        Args:
-            handlers: список обработчиков
-        """
-        self._remove_loging()  # Очистка прежних обработчиков
-
+        self._remove_logging()
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.NOTSET)
 
-        # Добавление фильтрующих обработчиков
         root_logger.addHandler(
             FilteringHandler(
                 self.handlers_logger[HandlerLogger.file], service_text=self.service_text
@@ -148,50 +131,47 @@ class TuneLogger:
                 service_text=self.service_text,
             )
         )
-        # Добавление накопителя необработанных сообщений
         root_logger.addHandler(self.handlers_logger[HandlerLogger.not_processed_vidops])
 
     @staticmethod
-    def _remove_loging() -> None:
-        """Удаляет все обработчики из корневого логгера."""
+    def _remove_logging() -> None:
         logger_root = logging.getLogger()
         for handler in logger_root.handlers[:]:
             logger_root.removeHandler(handler)
 
     def get_accumulated_vidops(self) -> set[str]:
-        """
-        Возвращает список накопленных сообщений из обработчика AccumulateVidops.
-
-        Returns:
-            list[str]: накопленные сообщения
-        """
+        """Возвращает набор (set) накопленных сообщений из AccumulateVidops."""
         return self.accumulate_vidops.accumulate
 
     def level_str_int(
-        self, level_str: str, level_default: int = logging.WARNING
+        self, level_str: str | None, level_default: int = logging.WARNING
     ) -> int:
-        """
-        Преобразует строку уровня логирования в числовое значение.
+        # поддержим числа и строки
+        if level_str is None:
+            return level_default
+        try:
+            # если пришёл "20" или 20
+            if str(level_str).isdigit():
+                return int(level_str)
+        except Exception:
+            pass
 
-        Args:
-            level_str: строка, обозначающая уровень ("INFO", "ERROR" и т.д.)
-            level_default: уровень по умолчанию, если строка некорректна
-
-        Returns:
-            int: числовой уровень логирования
-        """
-        level_int = LEVEL_STR_TO_INT.get(level_str)
-        if level_int:
+        level_int = LEVEL_STR_TO_INT.get(str(level_str).upper())
+        if level_int is not None:
             return level_int
-        # При ошибке фиксируется неверное значение
-        self.level_errors.append(level_str)
+
+        self.level_errors.append(str(level_str))
         self.log_errors()
         return level_default
 
     def log_errors(self) -> None:
-        """Логирует ошибки при указании некорректных уровней в конфигурации."""
-        if self.level_errors:
-            logging.error(
-                f"\nВ cfg файле недопустимое значение/значения уровня логирования - "
-                f"{', '.join(self.level_errors)}\nПрименяем уровень логирования по умолчанию"
-            )
+        """Логирует неизвестные уровни; если обработчики ещё не подключены — печатает в stderr."""
+        if not self.level_errors:
+            return
+        msg = f"Неизвестные уровни логирования: {', '.join(self.level_errors)}"
+        # Если логгер уже настроен, используем его — иначе fallback на stderr
+        logger_ = logging.getLogger()
+        if logger_.hasHandlers():
+            logger_.warning(msg)
+        else:
+            print(msg, file=sys.stderr)

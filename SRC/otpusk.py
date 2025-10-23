@@ -1,41 +1,25 @@
-"""OTPUSK: обработка записей UCHRABVR и генерация SQL-обновлений.
+"""OTPUSK: перерасчёт предварительной разноски по UCHRABVR и генерация SQL-UPDATE.
 (с) Л. А. Большаков, 2025
 
 Назначение
 ---------
-Программа используется для отката выделения РКСН из отпускных и средних,
-чтобы начислить на них НДФЛ по шкале надбавок.
+Программа корректирует суммы в «основных» видах оплат на основании «вторичных»
+(РКСН) по правилу соответствий `VARIABLE_VIDOPS` и формирует список SQL-операторов.
 
-Как это работает
+Вход:
+    * CSV-файл `UCHRABVR.txt` (кодировка cp866): поля соответствуют `Uchrabvr`.
+Конфигурация:
+    * `otpusk.cfg` — уровни логирования, пути, формат логов; при отсутствии —
+      используются дефолты из `REQUIRED_PARAMETERS`.
+Логирование:
+    * через `TuneLogger`; служебный маркер `SERVICE_TEXT` используется для
+      исключения сообщений из основного лога и параллельного сбора «неохваченных» vidop.
 
-1. Система Галактика определяет отпускные и средние, которые нужно скорректировать.
-2. Она формирует и выгружает файл предварительной разноски с записями,
-    подлежащими корректировке — UCHRABVR.txt.
-3. Программа обрабатывает этот файл:
-    * В основных видах оплат проставляются суммы,
-        равные ранее начисленным по видам оплат РКСН.
-    * Формируются SQL-запросы для корректировки таблицы UCHRABVR.
-
-В терминологии программы основные начисления называются "основными",
-а начисляемые на них надбавки (РКСН) "вторичными"
-
-Скрипт читает файл `UCHRABVR.txt`(предварительная разноска),
-группирует строки по сотруднику (`clsch`),
-По «вторичным» видам оплат ищет «основные» по правилу `VARIABLE_VIDOPS`,
-суммирует значения и формирует список `UPDATE`‑операторов корректировки
-оплат предварительной разноске Галактики.
-
-Основные понятия
-----------------
-* Uchrabvr: единица входных данных (строка из исходного файла).
-* VARIABLE_VIDOPS: таблица соответствий основных ↔ вторичных кодов оплат.
-
-Особенности и ограничения
--------------------------
-* Денежные вычисления выполняются с `Decimal` и округлением до копеек.
-* Конфигурация читается из `otpusk.cfg`; при отсутствии файла конфигурации или параметров
-  используются значения по умолчанию.
-* Логирование настраивается через `TuneLogger` (отдельный модуль).
+Пайплайн:
+    1) Чтение и группировка записей по `clsch`.
+    2) Для каждой группы: поиск соответствий вторичных→основных, суммирование.
+    3) Формирование SQL: `UPDATE uchrabvr WHERE nrec=... SET summa:=...;`
+    4) Журнализация неохваченных видов оплат (служебным форматом).
 
 Пример запуска
 --------------
@@ -43,19 +27,12 @@
 записываются в файл, заданный в настройках (по умолчанию `galaktika.lot`).
 """
 
-from configparser import ConfigParser
-from typing import NamedTuple, Any, Iterable, Iterator
-import sys
-from decimal import Decimal, ROUND_HALF_EVEN, getcontext
-
-# Точность операций Decimal (значащих цифр). Для финансовых расчётов достаточно.
-getcontext().prec = 28
+from typing import NamedTuple, Iterable
 
 from pathlib import Path
-import csv
 import logging
 
-from SRC.tune_logger import TuneLogger
+from SRC.common import Common, VARIABLE_VIDOPS, RequiredParameter
 
 # ==== Модели данных ===========================================================
 # fmt: off
@@ -65,36 +42,34 @@ class Uchrabvr(NamedTuple):
     Поля соответствуют колонкам CSV (порядок фиксирован).
     Все значения поступают как строки и интерпретируются логикой ниже.
     """
-    nrec        : str
-    tabn        : str
-    mes         : str
-    mesn        : str
-    vidop       : str
-    summa       : str
-    summaval    : str
-    datan       : str
-    datok       : str
-    clsch       : str
-
-
-class PrimarySecondaryCodes(NamedTuple):
-    """Пара соответствия: основной(е) код(ы) ↔ вторичный(е) код(ы).
-
-    Оба поля допускают либо одну строку, либо кортеж строк.
-    """
-    primary     : tuple["str", ...] | str
-    secondary   : tuple["str", ...] | str
+    nrec            : str
+    tabn            : str
+    mes             : str
+    mesn            : str
+    vidop           : str
+    summa           : str
+    summaval        : str
+    datan           : str
+    datok           : str
+    clsch           : str
 
 # fmt: on
 
 # ==== Константы и тексты ======================================================
-CONFIG_FILE_PATH = "otpusk.cfg"
-DEFAULT_INPUT_FILE = "UCHRABVR.txt"
-DEFAULT_OUTPUT_FILE = "update.lot"
-DEFAULT_LOG_FILE = "otpusk.log"
-DEFAULT_SQL_FILE = "update.lot"
 SERVICE_TEXT = "*** | ***"  # маркер служебных сообщений в логе
 ZERO = "0.00"
+CONFIG_FILE_PATH = "otpusk.cfg"
+
+REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
+    "level_console": RequiredParameter("LOG", "CRITICAL"),
+    "level_file": RequiredParameter("LOG", "INFO"),
+    "file_log_path": RequiredParameter("FILES", "otpusk.log"),
+    "input_file_uchrabvr": RequiredParameter("FILES", "UCHRABVR.txt"),
+    "output_file_path": RequiredParameter("FILES", "update.lot"),
+    "log_format": RequiredParameter(
+        "LOG", "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
+    ),
+}
 
 TEXT_ERROR = [
     # 0
@@ -114,9 +89,6 @@ TEXT_ERROR = [
     "Виды операций, не обработанные программой {vidops}.\n"
     "Возможно не заданы в VARIABLE_VIDOPS",
     # 6
-    "Файл конфигураций {config_file} не найден.\n"
-    "Будут использоваться значения по умолчанию.",
-    # 7
     "При выполнении программы были зафиксированы ошибки.\n" "Подробности в log файле.",
 ]
 
@@ -137,21 +109,6 @@ WARNING_TEXT = (
     "\n11.После расчёта зарплаты, верните прежние значения алгоритмов."
 )
 
-# Соответствия основных и вторичных кодов оплат.
-# fmt: off
-VARIABLE_VIDOPS = (
-    PrimarySecondaryCodes(("18", "48", "87", "204") , ("305", "306")),
-    PrimarySecondaryCodes( "20"                     , ("315", "316")),
-    PrimarySecondaryCodes( "54"                     , ("313", "314")),
-    PrimarySecondaryCodes( "76"                     , ("309", "310")),
-    PrimarySecondaryCodes( "77"                     , ("311", "312")),
-    PrimarySecondaryCodes( "106"                    , ("303", "304")),
-    PrimarySecondaryCodes(("107", "111")            , ("307", "308")),
-    PrimarySecondaryCodes(("108", "109")            , ("318", "319")),
-    PrimarySecondaryCodes(("104", "110", "112")     , ("303", "304")),
-)
-# fmt: on
-
 
 class Otpusk:
     """Основной класс обработки.
@@ -165,45 +122,87 @@ class Otpusk:
     """
 
     def __init__(self) -> None:
-        # Внутренние накопители по одному сотруднику
-        self.person_uchrabvr: list[Uchrabvr] = []
-        self.processed_vidops: set[str] = set()
-        # Глобальный список SQL-операторов UPDATE
-        self.SQL_queries: list[str] = []
+        """
+        Конструктор основного класса.
 
-        # Конфигурация, параметры и код возврата
-        self.return_code = 0
-        self.config: ConfigParser = ConfigParser()
-        self.parameters: dict[str, str] = {}
-        self.fill_in_parameters()
+        Выполняет только подготовку внутреннего состояния, не запуская бизнес-логику.
+        Инициализация разбита на независимые этапы:
+          1. self._init_state()   — создание внутренних структур данных;
+          2. self._init_config()  — загрузка параметров из конфигурации;
+          3. self.common.init_logging() — настройка подсистемы логирования.
 
-        # Логирование
-        self.tune_logger: TuneLogger = TuneLogger(parameters=self.parameters)
-        self.tune_logger.setup_logging()
+        Атрибут `return_code` используется для фиксации кода завершения программы
+        (0 — успешное выполнение, 1 — были ошибки).
+        """
+        self.return_code: int = 0
+        self._init_state()
+        self._init_config()
+        self.common.init_logging()
 
-        # Стартовое предупреждение с перечнем основных кодов
-        self.service_warning()
+    def _init_state(self) -> None:
+        """
+        Создаёт и инициализирует внутренние структуры данных, которые
+        накапливаются в ходе обработки одного сотрудника и всей программы.
+
+        Атрибуты:
+            person_uchrabvr  — список объектов Uchrabvr (входные строки для одного сотрудника);
+            processed_vidops — множество кодов оплат, которые были обработаны;
+            SQL_queries      — итоговый список SQL-операторов UPDATE.
+        """
+        self.person_uchrabvr = []
+        self.processed_vidops = set()
+        self.SQL_queries = []
+
+    def _init_config(self) -> None:
+        """
+        Загружает параметры из конфигурационного файла и
+        связывает общий класс Common с текущим объектом.
+
+        Действия:
+            * создаётся ConfigParser и словарь parameters;
+            * Common(config, parameters) читает otpusk.cfg или задаёт значения по умолчанию;
+            * метод fill_in_parameters() возвращает код (0 — успех, 1 — предупреждение);
+            * ссылка на self.common.error сохраняется в self.error (для удобного вызова);
+            * добавляется служебный текст, используемый при журнализации.
+
+        Итог:
+            self.parameters содержит пути к файлам, уровни логирования и прочие настройки.
+        """
+
+        self.parameters = {}
+        self.common = Common(CONFIG_FILE_PATH, self.parameters, REQUIRED_PARAMETERS)
+        self.return_code = self.common.fill_in_parameters()
+        # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger для фильтрации/аккумуляции.
+        self.parameters["service_text"] = SERVICE_TEXT
+        self.error = self.common.error
 
     # ==== Внешний цикл обработки ============================================
     def start(self) -> None:
         """Главный вход: чтение, группировка по `clsch`, обработка групп."""
-        # Сбрасываем суммы в 0.00 на уровне потока строк
+
+        # Стартовое предупреждение с перечнем основных действий
+        self.service_warning()
+
+        # Создаём поток строк. Сбрасываем суммы в 0.00 на уровне потока
+        file_uchrabvr = self.parameters["input_file_uchrabvr"]
         all_uchrabvr: Iterable[Uchrabvr] = (
-            row._replace(summa=ZERO) for row in self.input_uchrabvr()
+            row._replace(summa=ZERO)
+            for row in self.common.input_table(file_uchrabvr, Uchrabvr)
         )
 
+        # Основной блок
         current_clsch = "-1"
         for uchrabvr in all_uchrabvr:
             # Смена сотрудника → обработать накопленную группу
             if uchrabvr.clsch != current_clsch:
                 self.processing_person()
                 current_clsch = uchrabvr.clsch
-                self.person_uchrabvr = []
+                self.person_uchrabvr.clear()
             self.person_uchrabvr.append(uchrabvr)
         # Хвост
         self.processing_person()
 
-    # ==== Обработка одной группы (сотрудника) ================================
+    # ==== Обработка одной группы (одного сотрудника) ================================
     def processing_person(self) -> None:
         """Полный конвейер для одного сотрудника."""
         if not self.person_uchrabvr:
@@ -231,7 +230,7 @@ class Otpusk:
                 )
 
     def control_processing_completion(self) -> None:
-        """Заносим в журнал неохваченные строки сотрудника (служебный формат)."""
+        """Заносим в журнал необработанные строки сотрудника (служебный формат)."""
         for uchrabvr in self.person_uchrabvr:
             if uchrabvr.vidop not in self.processed_vidops:
                 self.error(
@@ -303,12 +302,15 @@ class Otpusk:
     def update_primary_uchrabvr(
         self, num_in_person_uchrabvr: int, secondary_uchrabvr: Uchrabvr
     ) -> None:
-        """Прибавить `summaval` вторичной строки к `summa` найденной основной."""
+        """Прибавить `summaval` вторичной строки к `summa` найденной основной (Decimal через Common.sum_str)."""
         uchrabvr = self.person_uchrabvr[num_in_person_uchrabvr]
-        self.processed_vidops.add(uchrabvr.vidop)
-        self.processed_vidops.add(secondary_uchrabvr.vidop)
+        self.add_vidops_to_processed_vidops(uchrabvr.vidop, secondary_uchrabvr.vidop)
+
+        # Добавляем vidop в список обработанных vidop
+
+        # Прибавить `summaval` вторичной строки к `summa` найденной основной.
         try:
-            summa = self.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
+            summa = self.common.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
         except ValueError:
             self.error(
                 secondary_uchrabvr.tabn,
@@ -319,16 +321,17 @@ class Otpusk:
                 ),
             )
             raise
-        updated_uchrabvr = uchrabvr._replace(summa=summa)
+
+        # noinspection PyProtectedMember
+        updated_uchrabvr = uchrabvr._replace(
+            summa=summa
+        )  # pylint: disable=protected-access
         self.person_uchrabvr[num_in_person_uchrabvr] = updated_uchrabvr
 
-    def sum_str(self, s1: str, s2: str) -> str:
-        """Суммировать две суммы в строковом представлении и округлить до копеек.
-
-        Используется банковское округление `ROUND_HALF_EVEN`.
-        """
-        s_decimal = Decimal(s1) + Decimal(s2)
-        return str(s_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN))
+    def add_vidops_to_processed_vidops(self, vidop1: str, vidop2: str) -> None:
+        """Добавляем vidop в список обработанных vidop"""
+        self.processed_vidops.add(vidop1)
+        self.processed_vidops.add(vidop2)
 
     def prepare_string(
         self, row: Uchrabvr, num_error: int, main_vidop: str | tuple[str, ...]
@@ -343,55 +346,15 @@ class Otpusk:
             main_vidop=" или ".join(main_vidop),
         )
 
-    # ==== Обвязка I/O и сервис ==============================================
-    def error(self, tabn: str, text_error: str, level_log: int = logging.ERROR) -> None:
-        """Записать ошибку в лог общим форматом."""
-        logging.log(level_log, f"Табельный номер {tabn}\n{text_error}")
-
+    # ==== Сервис ==============================================
     def output_result(self) -> list[str]:
         """Вернуть сформированные SQL-запросы для записи в файл."""
         return self.SQL_queries
 
-    def input_uchrabvr(self) -> Iterator[Uchrabvr]:
-        """Построчное чтение входного и преобразование к `Uchrabvr`."""
-        file = Path(self.parameters["input_file_path"])
-        try:
-            with open(file, "r", newline="", encoding="utf-8") as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    yield Uchrabvr(*row)
-        except (FileNotFoundError, PermissionError) as e:
-            logging.critical(
-                f"Либо неверно указан файл, выгруженный из Галактики, либо он не доступен\n{e}"
-            )
-            sys.exit(1)
-
-    def fill_in_parameters(self) -> None:
-        """Загрузить настройки из CFG и заполнить словарь `parameters`."""
-        self.parameters["service_text"] = SERVICE_TEXT
-
-        if not Path(CONFIG_FILE_PATH).exists():
-            self.error("-----", TEXT_ERROR[6].format(config_file=CONFIG_FILE_PATH))
-            self.return_code = 1
-
-        self.config.read(CONFIG_FILE_PATH, encoding="utf-8")
-        self.from_cfg_to_param("level_console", "LOG", logging.CRITICAL)
-        self.from_cfg_to_param("level_file", "LOG", logging.INFO)
-        self.from_cfg_to_param("file_log_path", "FILES", DEFAULT_LOG_FILE)
-        self.from_cfg_to_param("input_file_path", "FILES", DEFAULT_INPUT_FILE)
-        self.from_cfg_to_param("output_file_path", "FILES", DEFAULT_SQL_FILE)
-
-    def from_cfg_to_param(
-        self, name_parameter: str, section: str, default: Any
-    ) -> None:
-        self.parameters[name_parameter] = self.config.get(
-            section, name_parameter, fallback=default
-        )
-
     def service_warning(self) -> None:
-        """Служебное предупреждение с перечнем необходимых действий.
-
-        Выводится один раз в начале, затем ожидается подтверждение пользователя.
+        """
+        Печатает пошаговые инструкции; формирует перечень основных vidop;
+        ставит паузу `input()` перед стартом.
         """
         all_vidops_primary: set[int] = set()
         for row in VARIABLE_VIDOPS:
@@ -405,7 +368,7 @@ class Otpusk:
 
     def stop(self) -> None:
         """Завершение работы: вывести неохваченные виды и закрыть логирование."""
-        accumulate_vidops = self.tune_logger.get_accumulated_vidops()
+        accumulate_vidops = self.common.tune_logger.get_accumulated_vidops()
         if accumulate_vidops:
             self.error(
                 "-----", TEXT_ERROR[5].format(vidops=", ".join(accumulate_vidops))
@@ -419,7 +382,7 @@ if __name__ == "__main__":
     otpusk.start()
     otpusk.stop()
 
-    out_path = Path(otpusk.parameters.get("output_file_path", DEFAULT_OUTPUT_FILE))
+    out_path = Path(otpusk.parameters["output_file_path"])
 
     try:
         with open(out_path, "w", encoding="cp866", newline="\r\n") as f_:
@@ -432,7 +395,7 @@ if __name__ == "__main__":
         otpusk.return_code = 1
 
     if otpusk.return_code:
-        otpusk.error("-----", TEXT_ERROR[7], logging.CRITICAL)
+        otpusk.error("-----", TEXT_ERROR[6], logging.CRITICAL)
 
     logging.shutdown()
     exit(otpusk.return_code)
