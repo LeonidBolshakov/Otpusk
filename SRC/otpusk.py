@@ -28,8 +28,9 @@
 """
 
 from typing import NamedTuple, Iterable
-
+from collections import defaultdict
 from pathlib import Path
+import sys
 import logging
 
 from SRC.common import Common, VARIABLE_VIDOPS, RequiredParameter
@@ -90,6 +91,10 @@ TEXT_ERROR = [
     "Возможно не заданы в VARIABLE_VIDOPS",
     # 6
     "При выполнении программы были зафиксированы ошибки.\n" "Подробности в log файле.",
+    # 7
+    "Программа завершена пользователем"
+    # 8
+    "Указан неверный путь на файл вывода операторов SQL {out_path} или к нему нет доступа.\n{ex}"
 ]
 
 WARNING_TEXT = (
@@ -135,6 +140,7 @@ class Otpusk:
         (0 — успешное выполнение, 1 — были ошибки).
         """
         self.return_code: int = 0
+        self._index_by_key = dict()
         self._init_state()
         self._init_config()
         self.common.init_logging()
@@ -208,9 +214,15 @@ class Otpusk:
         if not self.person_uchrabvr:
             return
 
+        self.create_index_by_key()
         self.processing_vidops()
         self.create_SQL_request()
         self.control_processing_completion()
+
+    def create_index_by_key(self) -> None:
+        self._index_by_key = defaultdict(list)
+        for i_row, row in enumerate(self.person_uchrabvr):
+            self._index_by_key[row.vidop, row.datan, row.datok].append(i_row)
 
     def processing_vidops(self) -> None:
         """Для каждой строки ищем вторичные коды и обновляем соответствующий основной."""
@@ -289,14 +301,11 @@ class Otpusk:
 
         # Основной блок
         nums_in_person_uchrabvr: list[int] = []
-        for num_in_person_uchrabvr, row in enumerate(self.person_uchrabvr):
-            for primary_vidop in primary_vidops:
-                if (
-                    row.vidop == primary_vidop
-                    and row.datan == datan
-                    and row.datok == datok
-                ):
-                    nums_in_person_uchrabvr.append(num_in_person_uchrabvr)
+        for pv in primary_vidops:
+            nums_in_person_uchrabvr.extend(
+                self._index_by_key.get((pv, datan, datok), [])
+            )
+
         return nums_in_person_uchrabvr
 
     def update_primary_uchrabvr(
@@ -379,23 +388,29 @@ class Otpusk:
 if __name__ == "__main__":
     # Точка входа CLI: создаём объект, запускаем обработку, пишем результат.
     otpusk = Otpusk()
-    otpusk.start()
+    try:
+        otpusk.start()
+    except KeyboardInterrupt:
+        otpusk.error("-----", TEXT_ERROR[7], logging.CRITICAL)
+        sys.exit(130)
+    except (FileNotFoundError, PermissionError, ValueError) as error:
+        sys.exit(1)
+
     otpusk.stop()
+
 
     out_path = Path(otpusk.parameters["output_file_path"])
 
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(out_path, "w", encoding="cp866", newline="\r\n") as f_:
             f_.write("\n".join(otpusk.output_result()))
     except (FileNotFoundError, PermissionError) as ex:
-        otpusk.error(
-            "-----",
-            f"Указан неверный путь на файл вывода SQL {out_path} или к нему нет доступа.\n{ex}",
-        )
+        otpusk.error("-----", TEXT_ERROR[8], logging.CRITICAL)
         otpusk.return_code = 1
 
     if otpusk.return_code:
         otpusk.error("-----", TEXT_ERROR[6], logging.CRITICAL)
 
     logging.shutdown()
-    exit(otpusk.return_code)
+    sys.exit(otpusk.return_code)

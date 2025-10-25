@@ -173,7 +173,7 @@ class CheckResult:
             return
         if summa != "0.00":
             mount = uder.group_vidud
-            logging.error(
+            logging.info(
                 f"Табельный номер; {uder.tabn}; Месяц; {mount}; Разница сумм налогов =; {summa}"
             )
 
