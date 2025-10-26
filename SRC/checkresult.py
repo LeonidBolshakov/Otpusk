@@ -20,6 +20,8 @@ import logging
 
 
 from SRC.common import Common, VARIABLE_VIDOPS, PrimarySecondaryCodes, RequiredParameter
+from SRC.otpusk import SERVICE_TEXT
+
 
 # fmt: off
 @dataclass(frozen=True, slots=True)
@@ -77,6 +79,8 @@ class CheckResult:
         return self.common.fill_in_parameters()
 
     def _init_logging(self) -> None:
+        # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger. Для этого модуля — заглушка
+        self.parameters["service_text"] = SERVICE_TEXT
         self.common.init_logging()
 
     def _normalize_data(self) -> None:
@@ -120,7 +124,7 @@ class CheckResult:
     def create_group_key(self, uder: Uder) -> str | None:
         """
         Возвращает ключ для группировки удержаний (месяц).
-        Если удержание - НДФЛ (VIDOPS_OF_TAX) и месяц,
+        Если удержание — НДФЛ (VIDOPS_OF_TAX) и месяц,
         за который произведено удержание, не больше предельного месяца,
         то возвращается месяц в формате ММ, иначе None.
         """
@@ -178,6 +182,7 @@ class CheckResult:
             )
 
     def validate_person_groups(self, filtered_uders: list[UderGrouped]) -> None:
+        # noinspection GrazieInspection
         """
         Проверяет удержания по всем группам у одной персоны:
         суммирует значения в каждой группе и сверяет, что итог равен нулю.
