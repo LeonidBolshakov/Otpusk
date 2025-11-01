@@ -80,8 +80,6 @@ class Uder:
         return self.common.fill_in_parameters()
 
     def _init_logging(self) -> None:
-        # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger. Для этого модуля — заглушка
-        self.parameters["service_text"] = SERVICE_TEXT
         self.common.init_logging()
 
     def _normalize_data(self) -> None:

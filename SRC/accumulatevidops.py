@@ -69,7 +69,7 @@ class AccumulateVidops(logging.Handler):
             Запись не передаётся дальше по цепочке обработчиков.
         """
         message = record.getMessage()
-        if self.service_text in message:
+        if self.service_text and self.service_text in message:
             # Извлекаем часть строки после service_text
             _, _, vidop = message.partition(self.service_text)
             # Добавляем очищенное значение в множество

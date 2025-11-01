@@ -72,7 +72,7 @@ class FilteringHandler(logging.Handler):
             record (logging.LogRecord): Лог-запись, сформированная логгером.
         """
         # Проверяем, содержит ли сообщение служебный текст
-        if self.service_text not in record.getMessage():
+        if not self.service_text or self.service_text not in record.getMessage():
             try:
                 # Передаём запись дальше по цепочке
                 self.target.handle(record)
