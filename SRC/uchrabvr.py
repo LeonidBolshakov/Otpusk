@@ -1,4 +1,4 @@
-"""OTPUSK: перерасчёт предварительной разноски по UCHRABVR и генерация SQL-UPDATE.
+"""UCHRABVR: перерасчёт предварительной разноски по UCHRABVR и генерация SQL-UPDATE.
 (с) Л. А. Большаков, 2025
 
 Назначение
@@ -7,9 +7,9 @@
 (РКСН) по правилу соответствий `VARIABLE_VIDOPS` и формирует список SQL-операторов.
 
 Вход:
-    * CSV-файл `UCHRABVR.txt` (кодировка cp866): поля соответствуют `Uchrabvr`.
+    * CSV-файл `UCHRABVR.txt` (кодировка cp866): поля соответствуют `UchrabvrStructure`.
 Конфигурация:
-    * `otpusk.cfg` — уровни логирования, пути, формат логов; при отсутствии —
+    * `uchrabvr.cfg` — уровни логирования, пути, формат логов; при отсутствии —
       используются дефолты из `REQUIRED_PARAMETERS`.
 Логирование:
     * через `TuneLogger`; служебный маркер `SERVICE_TEXT` используется для
@@ -18,7 +18,7 @@
 Пайплайн:
     1) Чтение и группировка записей по `clsch`.
     2) Для каждой группы: поиск соответствий вторичных→основных, суммирование.
-    3) Формирование SQL: `UPDATE uchrabvr WHERE nrec=... SET summa:=...;`
+    3) Формирование SQL: `UPDATE uchrabvr_ WHERE nrec=... SET summa:=...;`
     4) Журнализация неохваченных видов оплат (служебным форматом).
 
 Пример запуска
@@ -35,49 +35,50 @@ import logging
 
 from SRC.common import Common, VARIABLE_VIDOPS, RequiredParameter
 
+
 # ==== Модели данных ===========================================================
 # fmt: off
-class Uchrabvr(NamedTuple):
+class UchrabvrStructure(NamedTuple):
     """Строка UCHRABVR из входного файла.
 
     Поля соответствуют колонкам CSV (порядок фиксирован).
     Все значения поступают как строки и интерпретируются логикой ниже.
     """
-    nrec            : str
-    tabn            : str
-    mes             : str
-    mesn            : str
-    vidop           : str
-    summa           : str
-    summaval        : str
-    datan           : str
-    datok           : str
-    clsch           : str
+    nrec: str
+    tabn: str
+    mes: str
+    mesn: str
+    vidop: str
+    summa: str
+    summaval: str
+    datan: str
+    datok: str
+    clsch: str
 
-# fmt: on
 
 # ==== Константы и тексты ======================================================
 SERVICE_TEXT = "*** | ***"  # маркер служебных сообщений в логе
 ZERO = "0.00"
-CONFIG_FILE_PATH = "otpusk.cfg"
+CONFIG_FILE_PATH = "uchrabvr.cfg"
 
 REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
     "level_console": RequiredParameter("LOG", "CRITICAL"),
     "level_file": RequiredParameter("LOG", "INFO"),
-    "file_log_path": RequiredParameter("FILES", "otpusk.log"),
+    "file_log_path": RequiredParameter("FILES", "uchrabvr_.log"),
     "input_file_uchrabvr": RequiredParameter("FILES", "UCHRABVR.txt"),
-    "output_file_path": RequiredParameter("FILES", "update.lot"),
+    "output_file_path": RequiredParameter("FILES", "uchrabvr_update.lot"),
     "log_format": RequiredParameter(
         "LOG", "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
     ),
 }
+# fmt: on
 
 TEXT_ERROR = [
     # 0
-    "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok} "
+    "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok}"
     "не имеет основного вида оплаты {main_vidop}",
     # 1
-    "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok} "
+    "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok}"
     "имеет больше одного основного вида оплаты {main_vidop}",
     # 2
     "Вид оплаты {vidop}. Сумма или ранее вычисленная сумма у надбавки\n"
@@ -94,7 +95,7 @@ TEXT_ERROR = [
     # 7
     "Программа завершена пользователем"
     # 8
-    "Указан неверный путь на файл вывода операторов SQL {out_path} или к нему нет доступа.\n{ex}"
+    "Указан неверный путь на файл вывода операторов SQL {out_path} или к нему нет доступа.\n{ex}",
 ]
 
 WARNING_TEXT = (
@@ -106,7 +107,7 @@ WARNING_TEXT = (
     "\n       Заработная плата | Операции | Расчет зарплаты  | Предварительная разноска"
     "\n5. Выполните bat файл select_razn.bat"
     "\n6. В этом окне нажмите клавишу Enter и дождитесь завершения работы программы"
-    "\n7. Проанализируйте файл otpusk.log"
+    "\n7. Проанализируйте файл uchrabvr_.log"
     "\n8. Выполните bat файл update_razn.bat"
     "\n9. Установите алгоритм 2 у следующих видов оплаты {vidops} -->"
     "\n        Заработная плата | Настройка | Заполнение каталогов | Виды оплат и скидок"
@@ -115,7 +116,7 @@ WARNING_TEXT = (
 )
 
 
-class Otpusk:
+class Uchrabvr:
     """Основной класс обработки.
 
     Жизненный цикл:
@@ -151,13 +152,13 @@ class Otpusk:
         накапливаются в ходе обработки одного сотрудника и всей программы.
 
         Атрибуты:
-            person_uchrabvr  — список объектов Uchrabvr (входные строки для одного сотрудника);
+            person_uchrabvr  — список объектов UchrabvrStructure (входные строки для одного сотрудника);
             processed_vidops — множество кодов оплат, которые были обработаны;
-            SQL_queries      — итоговый список SQL-операторов UPDATE.
+            SQL_update_queries — итоговый список SQL-операторов UPDATE.
         """
         self.person_uchrabvr = []
         self.processed_vidops = set()
-        self.SQL_queries = []
+        self.SQL_update_queries = []
 
     def _init_config(self) -> None:
         """
@@ -166,7 +167,7 @@ class Otpusk:
 
         Действия:
             * создаётся ConfigParser и словарь parameters;
-            * Common(config, parameters) читает otpusk.cfg или задаёт значения по умолчанию;
+            * Common(config, parameters) читает uchrabvr_.cfg или задаёт значения по умолчанию;
             * метод fill_in_parameters() возвращает код (0 — успех, 1 — предупреждение);
             * ссылка на self.common.error сохраняется в self.error (для удобного вызова);
             * добавляется служебный текст, используемый при журнализации.
@@ -191,9 +192,9 @@ class Otpusk:
 
         # Создаём поток строк. Сбрасываем суммы в 0.00 на уровне потока
         file_uchrabvr = self.parameters["input_file_uchrabvr"]
-        all_uchrabvr: Iterable[Uchrabvr] = (
+        all_uchrabvr: Iterable[UchrabvrStructure] = (
             row._replace(summa=ZERO)
-            for row in self.common.input_table(file_uchrabvr, Uchrabvr)
+            for row in self.common.input_table(file_uchrabvr, UchrabvrStructure)
         )
 
         # Основной блок
@@ -237,7 +238,7 @@ class Otpusk:
         """Формируем SQL для строк, помеченных к записи (`write_down`)."""
         for row in self.person_uchrabvr:
             if row.summa != ZERO:
-                self.SQL_queries.append(
+                self.SQL_update_queries.append(
                     f"UPDATE uchrabvr WHERE nrec={row.nrec} SET summa:={row.summa};"
                 )
 
@@ -260,7 +261,7 @@ class Otpusk:
 
     # ==== Внутренняя логика ==================================================
     def update_uchrabvr(
-        self, uchrabvr: Uchrabvr, primary_vidops: str | tuple[str, ...]
+            self, uchrabvr: UchrabvrStructure, primary_vidops: str | tuple[str, ...]
     ) -> None:
         """Найти соответствующий основной код и прибавить `summaval` вторичной строки к `summa` основной.
         Основной код ищется по vidops, взятому из VARIABLE_VIDOPS, дате начала и дате окончания оплаты.
@@ -274,7 +275,7 @@ class Otpusk:
         )
 
         if len(nums_in_person_uchrabvr) == 0:
-            # Нет ни одного основного — это ошибка
+            # Нет ни одного основного — ошибка
             self.error(uchrabvr.tabn, self.prepare_string(uchrabvr, 0, primary_vidops))
             self.return_code = 1
             return
@@ -288,10 +289,10 @@ class Otpusk:
         self.update_primary_uchrabvr(nums_in_person_uchrabvr[0], uchrabvr)
 
     def find_uchrabvr(
-        self,
-        primary_vidops: Iterable[str] | str,
-        datan: str,
-        datok: str,
+            self,
+            primary_vidops: Iterable[str] | str,
+            datan: str,
+            datok: str,
     ) -> list[int]:
         """Найти индексы строк с vidop и совпадающими датами"""
         # Нормализация primary_vidops
@@ -309,7 +310,7 @@ class Otpusk:
         return nums_in_person_uchrabvr
 
     def update_primary_uchrabvr(
-        self, num_in_person_uchrabvr: int, secondary_uchrabvr: Uchrabvr
+            self, num_in_person_uchrabvr: int, secondary_uchrabvr: UchrabvrStructure
     ) -> None:
         """Прибавить `summaval` вторичной строки к `summa` найденной основной (Decimal через Common.sum_str)."""
         uchrabvr = self.person_uchrabvr[num_in_person_uchrabvr]
@@ -343,7 +344,7 @@ class Otpusk:
         self.processed_vidops.add(vidop2)
 
     def prepare_string(
-        self, row: Uchrabvr, num_error: int, main_vidop: str | tuple[str, ...]
+            self, row: UchrabvrStructure, num_error: int, main_vidop: str | tuple[str, ...]
     ) -> str:
         """Собрать сообщение об ошибке по шаблону."""
         if isinstance(main_vidop, str):
@@ -357,8 +358,8 @@ class Otpusk:
 
     # ==== Сервис ==============================================
     def output_result(self) -> list[str]:
-        """Вернуть сформированные SQL-запросы для записи в файл."""
-        return self.SQL_queries
+        """Вернуть сформированные SQL-запросы."""
+        return self.SQL_update_queries
 
     def service_warning(self) -> None:
         """
@@ -387,30 +388,29 @@ class Otpusk:
 
 if __name__ == "__main__":
     # Точка входа CLI: создаём объект, запускаем обработку, пишем результат.
-    otpusk = Otpusk()
+    uchrabvr_ = Uchrabvr()
     try:
-        otpusk.start()
+        uchrabvr_.start()
     except KeyboardInterrupt:
-        otpusk.error("-----", TEXT_ERROR[7], logging.CRITICAL)
+        uchrabvr_.error("-----", TEXT_ERROR[7], logging.CRITICAL)
         sys.exit(130)
     except (FileNotFoundError, PermissionError, ValueError) as error:
         sys.exit(1)
 
-    otpusk.stop()
+    uchrabvr_.stop()
 
-
-    out_path = Path(otpusk.parameters["output_file_path"])
+    out_path = Path(uchrabvr_.parameters["output_file_path"])
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(out_path, "w", encoding="cp866", newline="\r\n") as f_:
-            f_.write("\n".join(otpusk.output_result()))
+            f_.write("\n".join(uchrabvr_.output_result()))
     except (FileNotFoundError, PermissionError) as ex:
-        otpusk.error("-----", TEXT_ERROR[8], logging.CRITICAL)
-        otpusk.return_code = 1
+        uchrabvr_.error("-----", TEXT_ERROR[8], logging.CRITICAL)
+        uchrabvr_.return_code = 1
 
-    if otpusk.return_code:
-        otpusk.error("-----", TEXT_ERROR[6], logging.CRITICAL)
+    if uchrabvr_.return_code:
+        uchrabvr_.error("-----", TEXT_ERROR[6], logging.CRITICAL)
 
     logging.shutdown()
-    sys.exit(otpusk.return_code)
+    sys.exit(uchrabvr_.return_code)

@@ -1,0 +1,18 @@
+select
+     NREC,
+     TABN,
+     MES,
+     MESN,
+     VIDOPL,
+     SUMMA,
+     SUMMAVAL,
+     DATAN,
+     DATOK,
+     CLSCH
+from
+     UCHRABVR
+where
+     POMETKA='èë'
+order by CLSCH    
+to txt UCHRABVR.txt
+;    

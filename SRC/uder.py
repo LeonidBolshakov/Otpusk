@@ -1,5 +1,5 @@
 """
-Проверка удержаний по месяцам (CheckResult).
+Проверка налоговых удержаний по месяцам (Uder).
 
 Назначение:
     Считывает `UDER.txt`, нормализует коды/месяцы, группирует удержания по сотруднику
@@ -18,27 +18,28 @@ from typing import Iterable
 from dataclasses import dataclass, asdict
 import logging
 
-
 from SRC.common import Common, VARIABLE_VIDOPS, PrimarySecondaryCodes, RequiredParameter
-from SRC.otpusk import SERVICE_TEXT
+from SRC.uchrabvr import SERVICE_TEXT
 
 
 # fmt: off
 @dataclass(frozen=True, slots=True)
-class Uder:
-    nrec:       str
-    tabn:       str
-    mes:        str
-    vidud:      str
-    sumud:      str
-    clsch:      str
-    datav:      str
-    vidoplud:   str
+class UderStructure:
+    nrec: str
+    tabn: str
+    mes: str
+    vidud: str
+    sumud: str
+    clsch: str
+    datav: str
+    vidoplud: str
+
+
 # fmt: on
 
 
 @dataclass(frozen=True, slots=True)
-class UderGrouped(Uder):
+class UderGrouped(UderStructure):
     group_vidud: str
 
 
@@ -55,13 +56,13 @@ REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
 }
 
 
-class CheckResult:
+class Uder:
     """Загрузка параметров, настройка логирования, нормализация данных и проверка удержаний по группам."""
 
     def __init__(self) -> None:
         self.config = ConfigParser()
         self.parameters: dict[str, str] = {}
-        self.person_uders: list[Uder] = []
+        self.person_uders: list[UderStructure] = []
 
         # 1. Инициализация общих компонентов
         self.common = Common(CONFIG_FILE_PATH, self.parameters, REQUIRED_PARAMETERS)
@@ -84,7 +85,7 @@ class CheckResult:
         self.common.init_logging()
 
     def _normalize_data(self) -> None:
-        """Кэширует нормализованный предел месяца и таблицу соответствий VARIABLE_VIDOPS в виде кортежей строк."""
+        """Кэширует таблицу соответствий VARIABLE_VIDOPS в виде кортежей строк."""
         self.normalize_last_mount = self.normalize_mount(
             self.parameters.get("last_mount", "")
         )
@@ -94,8 +95,8 @@ class CheckResult:
 
     def start(self) -> None:
         file_uder = self.parameters["input_file_uder"]
-        all_uders: Iterable[Uder] = (
-            row for row in self.common.input_table(file_uder, Uder)
+        all_uders: Iterable[UderStructure] = (
+            row for row in self.common.input_table(file_uder, UderStructure)
         )
 
         logging.error(
@@ -121,7 +122,7 @@ class CheckResult:
         filtered_uders = self.filter_sort_by_group()
         self.validate_person_groups(filtered_uders)
 
-    def create_group_key(self, uder: Uder) -> str | None:
+    def create_group_key(self, uder: UderStructure) -> str | None:
         """
         Возвращает ключ для группировки удержаний (месяц).
         Если удержание — НДФЛ (VIDOPS_OF_TAX) и месяц,
@@ -130,8 +131,8 @@ class CheckResult:
         """
         normalize_mount = self.normalize_mount(uder.mes)
         if (
-            uder.vidud not in VIDOPS_OF_TAX
-            or self.normalize_last_mount < normalize_mount
+                uder.vidud not in VIDOPS_OF_TAX
+                or self.normalize_last_mount < normalize_mount
         ):
             return None
 
@@ -205,5 +206,5 @@ class CheckResult:
 
 
 if __name__ == "__main__":
-    check_result = CheckResult()
-    check_result.start()
+    uder_ = Uder()
+    uder_.start()

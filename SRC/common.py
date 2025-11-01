@@ -29,6 +29,7 @@ MSG_CFG_NOT_FOUND = (
 )
 
 
+# fmt: off
 class PrimarySecondaryCodes(NamedTuple):
     """Пара соответствия: основной(е) код(ы) ↔ вторичный(е) код(ы)."""
 
@@ -47,11 +48,13 @@ VARIABLE_VIDOPS = (
     PrimarySecondaryCodes("54", ("313", "314")),
     PrimarySecondaryCodes("76", ("309", "310")),
     PrimarySecondaryCodes("77", ("311", "312")),
-    PrimarySecondaryCodes("106", ("303", "304")),
+    PrimarySecondaryCodes(("106", "104", "110", "112"), ("303", "304")),
     PrimarySecondaryCodes(("107", "111"), ("307", "308")),
     PrimarySecondaryCodes(("108", "109"), ("318", "319")),
-    PrimarySecondaryCodes(("104", "110", "112"), ("303", "304")),
 )
+
+
+# fmt: on
 
 
 class Common:
@@ -64,10 +67,10 @@ class Common:
     """
 
     def __init__(
-        self,
-        config_file_path: str,
-        parameters: dict[str, Any],
-        required_parameters: dict[str, RequiredParameter],
+            self,
+            config_file_path: str,
+            parameters: dict[str, Any],
+            required_parameters: dict[str, RequiredParameter],
     ) -> None:
         self.config = ConfigParser(interpolation=None)
         self.config_file_path = config_file_path
@@ -78,7 +81,7 @@ class Common:
     @staticmethod
     def error(tabn: str, text_error: str, level_log: int = logging.ERROR) -> None:
         """Записать ошибку/сообщение в лог общим форматом."""
-        logging.log(level_log, f"Табельный номер {tabn}\n{text_error}")
+        logging.log(level_log, f"Табельный номер {tabn} - {text_error}")
 
     @staticmethod
     def input_table(file_table: str, Table: Type[T]) -> Iterator[T]:
@@ -140,7 +143,7 @@ class Common:
         self.tune_logger.setup_logging()
 
     def from_cfg_to_param(
-        self, name_parameter: str, section: str, default: str
+            self, name_parameter: str, section: str, default: str
     ) -> None:
         # Замена отсутствующих секций/опций выполняется через fallback; всё храним как str.
         value = self.config.get(section, name_parameter, fallback=default)
