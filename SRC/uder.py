@@ -18,21 +18,25 @@ from typing import Iterable
 from dataclasses import dataclass, asdict
 import logging
 
-from SRC.common import Common, VARIABLE_VIDOPS, PrimarySecondaryCodes, RequiredParameter
-from SRC.uchrabvr import SERVICE_TEXT
+from SRC.common import (
+    Common,
+    PRIMARY_SECONDARY_PAYCODES,
+    PrimarySecondaryCodes,
+    RequiredParameter,
+)
 
 
 # fmt: off
 @dataclass(frozen=True, slots=True)
 class UderStructure:
-    nrec: str
-    tabn: str
-    mes: str
-    vidud: str
-    sumud: str
-    clsch: str
-    datav: str
-    vidoplud: str
+    nrec            : str
+    tabn            : str
+    mes             : str
+    vidud           : str
+    sumud           : str
+    clsch           : str
+    datav           : str
+    vidoplud        : str
 
 
 # fmt: on
@@ -83,12 +87,12 @@ class Uder:
         self.common.init_logging()
 
     def _normalize_data(self) -> None:
-        """Кэширует таблицу соответствий VARIABLE_VIDOPS в виде кортежей строк."""
+        """Кэширует таблицу соответствий PRIMARY_SECONDARY_PAYCODES в виде кортежей строк."""
         self.normalize_last_mount = self.normalize_mount(
             self.parameters.get("last_mount", "")
         )
         self.normalized_variable_vidops = tuple(
-            self.normalize_codes(row) for row in VARIABLE_VIDOPS
+            self.normalize_codes(row) for row in PRIMARY_SECONDARY_PAYCODES
         )
 
     def start(self) -> None:
@@ -129,8 +133,8 @@ class Uder:
         """
         normalize_mount = self.normalize_mount(uder.mes)
         if (
-                uder.vidud not in VIDOPS_OF_TAX
-                or self.normalize_last_mount < normalize_mount
+            uder.vidud not in VIDOPS_OF_TAX
+            or self.normalize_last_mount < normalize_mount
         ):
             return None
 

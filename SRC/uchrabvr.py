@@ -4,7 +4,7 @@
 Назначение
 ---------
 Программа корректирует суммы в «основных» видах оплат на основании «вторичных»
-(РКСН) по правилу соответствий `VARIABLE_VIDOPS` и формирует список SQL-операторов.
+(РКСН) по правилу соответствий `PRIMARY_SECONDARY_PAYCODES` и формирует список SQL-операторов.
 
 Вход:
     * CSV-файл `UCHRABVR.txt` (кодировка cp866): поля соответствуют `UchrabvrStructure`.
@@ -33,41 +33,53 @@ from pathlib import Path
 import sys
 import logging
 
-from SRC.common import Common, VARIABLE_VIDOPS, RequiredParameter
+from SRC.common import (
+    Common,
+    RequiredParameter,
+    PRIMARY_SECONDARY_PAYCODES,
+    PrimarySecondaryCodes,
+)
 
 
 # ==== Модели данных ===========================================================
-# fmt: off
+
+
 class UchrabvrStructure(NamedTuple):
     """Строка UCHRABVR из входного файла.
 
     Поля соответствуют колонкам CSV (порядок фиксирован).
     Все значения поступают как строки и интерпретируются логикой ниже.
     """
-    nrec: str
-    tabn: str
-    mes: str
-    mesn: str
-    vidop: str
-    summa: str
-    summaval: str
-    datan: str
-    datok: str
-    clsch: str
+
+    # fmt: off
+    nrec        : str
+    tabn        : str
+    mes         : str
+    mesn        : str
+    vidop       : str
+    summa       : str
+    summaval    : str
+    datan       : str
+    datok       : str
+    clsch       : str
+
+
+# fmt: on
 
 
 # ==== Константы и тексты ======================================================
-SERVICE_TEXT = "*** | ***"  # маркер служебных сообщений в логе
-ZERO = "0.00"
-CONFIG_FILE_PATH = "uchrabvr.cfg"
+# fmt: off
+SERVICE_TEXT        = "*** | ***"  # маркер служебных сообщений в логе
+ZERO                = "0.00"
+CONFIG_FILE_PATH    = "uchrabvr.cfg"
 
 REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
-    "level_console": RequiredParameter("LOG", "CRITICAL"),
-    "level_file": RequiredParameter("LOG", "INFO"),
-    "file_log_path": RequiredParameter("FILES", "uchrabvr_.log"),
-    "input_file_uchrabvr": RequiredParameter("FILES", "UCHRABVR.txt"),
-    "output_file_path": RequiredParameter("FILES", "uchrabvr_update.lot"),
-    "log_format": RequiredParameter(
+    "level_console"         : RequiredParameter("LOG", "CRITICAL"),
+    "level_file"            : RequiredParameter("LOG", "INFO"),
+    "file_log_path"         : RequiredParameter("FILES", "uchrabvr_.log"),
+    "input_file_uchrabvr"   : RequiredParameter("FILES", "UCHRABVR.txt"),
+    "output_file_path"      : RequiredParameter("FILES", "uchrabvr_update.lot"),
+    "log_format"            : RequiredParameter(
         "LOG", "%(asctime)s - %(levelname)s - %(module)s - %(message)s"
     ),
 }
@@ -84,12 +96,14 @@ TEXT_ERROR = [
     "Вид оплаты {vidop}. Сумма или ранее вычисленная сумма у надбавки\n"
     "не преобразуется в число с плавающей запятой {summa_1} {summa_2}",
     # 3
-    "Код вида вторичной оплаты в VARIABLE_VIDOPS не целое число - {vidop}",
+    "Ошибка в программе."
+    "\nВ PRIMARY_SECONDARY_PAYCODES дублируются следующие коды secondary {codes}."
+    "\nДальнейшая работа невозможна",
     # 4 — текст не менять, соответствует SERVICE_TEXT в лог-обработчиках
     "Необработанный вид оплаты {service_text} {vidop}",
     # 5
     "Виды операций, не обработанные программой {vidops}.\n"
-    "Возможно не заданы в VARIABLE_VIDOPS",
+    "Возможно не заданы в PRIMARY_SECONDARY_PAYCODES",
     # 6
     "При выполнении программы были зафиксированы ошибки.\n" "Подробности в log файле.",
     # 7
@@ -105,10 +119,10 @@ WARNING_TEXT = (
     "\n       Заработная плата | Настройка | Сервисные функции | Перерасчет средних"
     "\n4. Выполните предварительную разноску -->"
     "\n       Заработная плата | Операции | Расчет зарплаты  | Предварительная разноска"
-    "\n5. Выполните bat файл select_razn.bat"
+    "\n5. Выполните bat файл uchrabvr_select.bat"
     "\n6. В этом окне нажмите клавишу Enter и дождитесь завершения работы программы"
-    "\n7. Проанализируйте файл uchrabvr_.log"
-    "\n8. Выполните bat файл update_razn.bat"
+    "\n7. Проанализируйте файл uchrabvr.log"
+    "\n8. Выполните bat файл uchrabvr_update.bat"
     "\n9. Установите алгоритм 2 у следующих видов оплаты {vidops} -->"
     "\n        Заработная плата | Настройка | Заполнение каталогов | Виды оплат и скидок"
     "\n10. Вызовите расчёт зарплаты, НЕ ставьте галочку 'Предварительная разноска'"
@@ -142,8 +156,9 @@ class Uchrabvr:
         """
         self.return_code: int = 0
         self._index_by_key = dict()
-        self._init_state()
         self._init_config()
+        self._init_validate()
+        self._init_state()
         self.common.init_logging()
 
     def _init_state(self) -> None:
@@ -169,7 +184,6 @@ class Uchrabvr:
             * создаётся ConfigParser и словарь parameters;
             * Common(config, parameters) читает uchrabvr_.cfg или задаёт значения по умолчанию;
             * метод fill_in_parameters() возвращает код (0 — успех, 1 — предупреждение);
-            * ссылка на self.common.error сохраняется в self.error (для удобного вызова);
             * добавляется служебный текст, используемый при журнализации.
 
         Итог:
@@ -181,7 +195,6 @@ class Uchrabvr:
         self.return_code = self.common.fill_in_parameters()
         # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger для фильтрации/аккумуляции.
         self.parameters["service_text"] = SERVICE_TEXT
-        self.error = self.common.error
 
     # ==== Внешний цикл обработки ============================================
     def start(self) -> None:
@@ -229,7 +242,7 @@ class Uchrabvr:
         """Для каждой строки ищем вторичные коды и обновляем соответствующий основной."""
         self.processed_vidops.clear()
         for row in self.person_uchrabvr:
-            for variable in VARIABLE_VIDOPS:
+            for variable in PRIMARY_SECONDARY_PAYCODES:
                 if row.vidop in variable.secondary:
                     self.update_uchrabvr(row, variable.primary)
                     break
@@ -246,13 +259,13 @@ class Uchrabvr:
         """Заносим в журнал необработанные строки сотрудника (служебный формат)."""
         for uchrabvr in self.person_uchrabvr:
             if uchrabvr.vidop not in self.processed_vidops:
-                self.error(
+                self.common.error(
                     "-----",
                     TEXT_ERROR[4].format(
                         service_text=SERVICE_TEXT, vidop=uchrabvr.vidop
                     ),
                 )
-                self.error(
+                self.common.error(
                     uchrabvr.tabn,
                     TEXT_ERROR[4].format(service_text="", vidop=uchrabvr.vidop),
                     logging.WARNING,
@@ -261,10 +274,10 @@ class Uchrabvr:
 
     # ==== Внутренняя логика ==================================================
     def update_uchrabvr(
-            self, uchrabvr: UchrabvrStructure, primary_vidops: str | tuple[str, ...]
+        self, uchrabvr: UchrabvrStructure, primary_vidops: str | tuple[str, ...]
     ) -> None:
         """Найти соответствующий основной код и прибавить `summaval` вторичной строки к `summa` основной.
-        Основной код ищется по vidops, взятому из VARIABLE_VIDOPS, дате начала и дате окончания оплаты.
+        Основной код ищется по vidops, взятому из PRIMARY_SECONDARY_PAYCODES, дате начала и дате окончания оплаты.
 
         Если подходящих основных строк 0 или >1 — Заносим в журнал ошибку с пояснением.
         """
@@ -276,12 +289,16 @@ class Uchrabvr:
 
         if len(nums_in_person_uchrabvr) == 0:
             # Нет ни одного основного — ошибка
-            self.error(uchrabvr.tabn, self.prepare_string(uchrabvr, 0, primary_vidops))
+            self.common.error(
+                uchrabvr.tabn, self.prepare_string(uchrabvr, 0, primary_vidops)
+            )
             self.return_code = 1
             return
         if len(nums_in_person_uchrabvr) > 1:
             # Несколько основных для одной вторичной строки — неоднозначность
-            self.error(uchrabvr.tabn, self.prepare_string(uchrabvr, 1, primary_vidops))
+            self.common.error(
+                uchrabvr.tabn, self.prepare_string(uchrabvr, 1, primary_vidops)
+            )
             self.return_code = 1
             return
 
@@ -289,10 +306,10 @@ class Uchrabvr:
         self.update_primary_uchrabvr(nums_in_person_uchrabvr[0], uchrabvr)
 
     def find_uchrabvr(
-            self,
-            primary_vidops: Iterable[str] | str,
-            datan: str,
-            datok: str,
+        self,
+        primary_vidops: Iterable[str] | str,
+        datan: str,
+        datok: str,
     ) -> list[int]:
         """Найти индексы строк с vidop и совпадающими датами"""
         # Нормализация primary_vidops
@@ -310,7 +327,7 @@ class Uchrabvr:
         return nums_in_person_uchrabvr
 
     def update_primary_uchrabvr(
-            self, num_in_person_uchrabvr: int, secondary_uchrabvr: UchrabvrStructure
+        self, num_in_person_uchrabvr: int, secondary_uchrabvr: UchrabvrStructure
     ) -> None:
         """Прибавить `summaval` вторичной строки к `summa` найденной основной (Decimal через Common.sum_str)."""
         uchrabvr = self.person_uchrabvr[num_in_person_uchrabvr]
@@ -322,7 +339,7 @@ class Uchrabvr:
         try:
             summa = self.common.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
         except ValueError:
-            self.error(
+            self.common.error(
                 secondary_uchrabvr.tabn,
                 TEXT_ERROR[2].format(
                     vidop=uchrabvr.vidop,
@@ -344,7 +361,7 @@ class Uchrabvr:
         self.processed_vidops.add(vidop2)
 
     def prepare_string(
-            self, row: UchrabvrStructure, num_error: int, main_vidop: str | tuple[str, ...]
+        self, row: UchrabvrStructure, num_error: int, main_vidop: str | tuple[str, ...]
     ) -> str:
         """Собрать сообщение об ошибке по шаблону."""
         if isinstance(main_vidop, str):
@@ -355,6 +372,39 @@ class Uchrabvr:
             datok=row.datok,
             main_vidop=" или ".join(main_vidop),
         )
+
+    def _init_validate(self):
+        """Валидация констант и входных данных"""
+        codes = self.validate_unique_secondary_codes(PRIMARY_SECONDARY_PAYCODES)
+        if codes:
+            self.common.error(
+                "-----",
+                TEXT_ERROR[3].format(codes=codes),
+            )
+            exit(1)
+
+    @staticmethod
+    def validate_unique_secondary_codes(
+        variable_vidops: Iterable[PrimarySecondaryCodes],
+    ) -> list[str]:
+        """
+        Проверка уникальности secondary кодов в PRIMARY_SECONDARY_PAYCODES
+        :param variable_vidops: PRIMARY_SECONDARY_PAYCODES
+        :return: Список дублирующихся кодов
+        """
+        all_codes: list[str] = []
+        dublicate_codes: list[str] = []
+        for row in variable_vidops:
+            secondary = (
+                (row.secondary,) if isinstance(row.secondary, str) else row.secondary
+            )
+            for code in secondary:
+                if code in all_codes:
+                    dublicate_codes.append(code)
+                else:
+                    all_codes.append(code)
+
+        return dublicate_codes
 
     # ==== Сервис ==============================================
     def output_result(self) -> list[str]:
@@ -367,7 +417,7 @@ class Uchrabvr:
         ставит паузу `input()` перед стартом.
         """
         all_vidops_primary: set[int] = set()
-        for row in VARIABLE_VIDOPS:
+        for row in PRIMARY_SECONDARY_PAYCODES:
             vidops = (row.primary,) if isinstance(row.primary, str) else row.primary
             for vidop in vidops:
                 all_vidops_primary.add(int(vidop))
@@ -380,7 +430,7 @@ class Uchrabvr:
         """Завершение работы: вывести неохваченные виды и закрыть логирование."""
         accumulate_vidops = self.common.tune_logger.get_accumulated_vidops()
         if accumulate_vidops:
-            self.error(
+            self.common.error(
                 "-----", TEXT_ERROR[5].format(vidops=", ".join(accumulate_vidops))
             )
         logging.critical("\nПрограмма закончила свою работу\n")
@@ -392,8 +442,8 @@ if __name__ == "__main__":
     try:
         uchrabvr_.start()
     except KeyboardInterrupt:
-        uchrabvr_.error("-----", TEXT_ERROR[7], logging.CRITICAL)
-        sys.exit(130)
+        uchrabvr_.common.error("-----", TEXT_ERROR[7], logging.CRITICAL)
+        raise
     except (FileNotFoundError, PermissionError, ValueError) as error:
         sys.exit(1)
 
@@ -406,11 +456,11 @@ if __name__ == "__main__":
         with open(out_path, "w", encoding="cp866", newline="\r\n") as f_:
             f_.write("\n".join(uchrabvr_.output_result()))
     except (FileNotFoundError, PermissionError) as ex:
-        uchrabvr_.error("-----", TEXT_ERROR[8], logging.CRITICAL)
+        uchrabvr_.common.error("-----", TEXT_ERROR[8], logging.CRITICAL)
         uchrabvr_.return_code = 1
 
     if uchrabvr_.return_code:
-        uchrabvr_.error("-----", TEXT_ERROR[6], logging.CRITICAL)
+        uchrabvr_.common.error("-----", TEXT_ERROR[6], logging.CRITICAL)
 
     logging.shutdown()
     sys.exit(uchrabvr_.return_code)

@@ -31,29 +31,31 @@ MSG_CFG_NOT_FOUND = (
 
 # fmt: off
 class PrimarySecondaryCodes(NamedTuple):
-    """Пара соответствия: основной(е) код(ы) ↔ вторичный(е) код(ы)."""
+    """Пара соответствия: основной(е) код(ы) ↔ вторичный(е) код(ы).
 
-    primary: tuple[str, ...] | str
-    secondary: tuple[str, ...] | str
+    Используется для связывания видов оплат:
+    - primary  — основные коды оплат (исходные начисления);
+    - secondary — вторичные коды (районные коэффициенты и северные надбавки).
+    """
+
+    primary         : tuple[str, ...] | str
+    secondary       : tuple[str, ...] | str
 
 
-class RequiredParameter(NamedTuple):
-    section_name: str
-    default_value: str
-
-
-VARIABLE_VIDOPS = (
-    PrimarySecondaryCodes(("18", "48", "87", "204"), ("305", "306")),
-    PrimarySecondaryCodes("20", ("315", "316")),
-    PrimarySecondaryCodes("54", ("313", "314")),
-    PrimarySecondaryCodes("76", ("309", "310")),
-    PrimarySecondaryCodes("77", ("311", "312")),
-    PrimarySecondaryCodes(("106", "104", "110", "112"), ("303", "304")),
-    PrimarySecondaryCodes(("107", "111"), ("307", "308")),
-    PrimarySecondaryCodes(("108", "109"), ("318", "319")),
+PRIMARY_SECONDARY_PAYCODES = (
+    PrimarySecondaryCodes(("18", "48", "87", "204")     , ("305", "306")),
+    PrimarySecondaryCodes("20"                          , ("315", "316")),
+    PrimarySecondaryCodes("54"                          , ("313", "314")),
+    PrimarySecondaryCodes("76"                          , ("309", "310")),
+    PrimarySecondaryCodes("77"                          , ("311", "312")),
+    PrimarySecondaryCodes(("106", "104", "110", "112")  , ("303", "304")),
+    PrimarySecondaryCodes(("107", "111")                , ("307", "308")),
+    PrimarySecondaryCodes(("108", "109")                , ("318", "319")),
 )
 
-
+class RequiredParameter(NamedTuple):
+    section_name    : str
+    default_value   : str
 # fmt: on
 
 
@@ -67,10 +69,10 @@ class Common:
     """
 
     def __init__(
-            self,
-            config_file_path: str,
-            parameters: dict[str, Any],
-            required_parameters: dict[str, RequiredParameter],
+        self,
+        config_file_path: str,
+        parameters: dict[str, Any],
+        required_parameters: dict[str, RequiredParameter],
     ) -> None:
         self.config = ConfigParser(interpolation=None)
         self.config_file_path = config_file_path
@@ -143,7 +145,7 @@ class Common:
         self.tune_logger.setup_logging()
 
     def from_cfg_to_param(
-            self, name_parameter: str, section: str, default: str
+        self, name_parameter: str, section: str, default: str
     ) -> None:
         # Замена отсутствующих секций/опций выполняется через fallback; всё храним как str.
         value = self.config.get(section, name_parameter, fallback=default)

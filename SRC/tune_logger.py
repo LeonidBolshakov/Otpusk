@@ -24,12 +24,14 @@ logger = logging.getLogger(__name__)
 
 # fmt: off
 LEVEL_STR_TO_INT = {
-    "DEBUG"     : logging.DEBUG,
-    "INFO"      : logging.INFO,
-    "WARNING"   : logging.WARNING,
-    "ERROR"     : logging.ERROR,
-    "CRITICAL"  : logging.CRITICAL,
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
 }
+
+
 # fmt: on
 
 
@@ -46,20 +48,22 @@ class TuneLogger:
 
         # 1) Разбор параметров с нормализацией
         self.log_level_console = self.level_str_int(
-            self._normalize_level(parameters["level_console"]))
+            self._normalize_level(parameters["level_console"])
+        )
         self.log_level_file = self.level_str_int(
-            self._normalize_level(parameters["level_file"]))
-        self.service_text = parameters["service_text"]
+            self._normalize_level(parameters["level_file"])
+        )
+        self.service_text = parameters.get("service_text", "")
         self.log_format = parameters["log_format"].strip()
 
         self.file_log_path = parameters["file_log_path"].strip()
 
         # 2) Подготовка вспомогательных объектов
-        self.accumulate_vidops = AccumulateVidops(self.service_text) 
+        self.accumulate_vidops = AccumulateVidops(self.service_text)
 
         # 3) Создание handlers (без присоединения к root)
         self.handlers_logger: dict[HandlerLogger, logging.Handler] = (
-            self._build_handlers()
+            self.build_handlers()
         )
 
     # === Helpers ===
@@ -71,7 +75,7 @@ class TuneLogger:
             return str(level)
         return str(level).strip().upper()
 
-    def _build_handlers(self) -> dict[HandlerLogger, logging.Handler]:
+    def build_handlers(self) -> dict[HandlerLogger, logging.Handler]:
         # гарантируем каталог
         Path(self.file_log_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -83,15 +87,15 @@ class TuneLogger:
         file_handler.setFormatter(fmt)
         console_handler.setFormatter(fmt)
 
-         # Установка уровня логирования
+        # Установка уровня логирования
         file_handler.setLevel(self.log_level_file)
         console_handler.setLevel(self.log_level_console)
-        self.accumulate_vidops.setLevel(logging.DEBUG) 
+        self.accumulate_vidops.setLevel(logging.DEBUG)
 
         return {
             HandlerLogger.file: file_handler,
             HandlerLogger.console: console_handler,
-            HandlerLogger.not_processed_vidops: self.accumulate_vidops, 
+            HandlerLogger.not_processed_vidops: self.accumulate_vidops,
         }
 
     def setup_logging(self) -> None:
@@ -99,7 +103,7 @@ class TuneLogger:
         self.configure_root_handlers(handlers)
 
     def create_file_handler(self, file_log_path: str) -> logging.FileHandler:
-        # Режим "w": файл лога перезаписывается при каждом запуске; encoding без BOM
+        # ? Режим "w": файл лога перезаписывается при каждом запуске; encoding без BOM
         return logging.FileHandler(
             filename=Path(file_log_path), mode="w", encoding="utf-8", delay=True
         )
@@ -120,7 +124,7 @@ class TuneLogger:
                 service_text=self.service_text,
             )
         )
-        root_logger.addHandler(self.handlers_logger[HandlerLogger.not_processed_vidops]) 
+        root_logger.addHandler(self.handlers_logger[HandlerLogger.not_processed_vidops])
 
     @staticmethod
     def _remove_logging() -> None:
@@ -135,7 +139,7 @@ class TuneLogger:
     def level_str_int(
         self, level_str: str | None, level_default: int = logging.WARNING
     ) -> int:
-        """ Преобразует мнемоническое представление уровня логирования в числовое
+        """Преобразует мнемоническое представление уровня логирования в числовое
         :param level_str: Мнемоничнское представление уровня логирования
         :param level_default: Значение по умолчанию (целое) применяемое, при ошибочном level_str
         :return: Чисорвое представление уровня логирования (целое)
@@ -155,7 +159,9 @@ class TuneLogger:
             return level_int
 
         # Параметр задан неверно
-        msg = f"Неизвестный уровень логирования: {level_str!r}; применяю {level_default}"
+        msg = (
+            f"Неизвестный уровень логирования: {level_str!r}; применяю {level_default}"
+        )
         root = logging.getLogger()
         if root.hasHandlers():
             root.warning(msg)
@@ -172,4 +178,5 @@ class TuneLogger:
             pass
 
         return None
+
     # Он рает конаву
