@@ -18,7 +18,7 @@
 Пайплайн:
     1) Чтение и группировка записей по `clsch`.
     2) Для каждой группы: поиск соответствий вторичных→основных, суммирование.
-    3) Формирование SQL: `UPDATE uchrabvr_ WHERE nrec=... SET summa:=...;`
+    3) Формирование SQL: `UPDATE uchrabvr WHERE nrec=... SET summa:=...;`
     4) Журнализация неохваченных видов оплат (служебным форматом).
 
 Пример запуска
@@ -76,7 +76,7 @@ CONFIG_FILE_PATH    = "uchrabvr.cfg"
 REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
     "level_console"         : RequiredParameter("LOG", "CRITICAL"),
     "level_file"            : RequiredParameter("LOG", "INFO"),
-    "file_log_path"         : RequiredParameter("FILES", "uchrabvr_.log"),
+    "file_log_path"         : RequiredParameter("FILES", "uchrabvr.log"),
     "input_file_uchrabvr"   : RequiredParameter("FILES", "UCHRABVR.txt"),
     "output_file_path"      : RequiredParameter("FILES", "uchrabvr_update.lot"),
     "log_format"            : RequiredParameter(
@@ -88,13 +88,13 @@ REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
 TEXT_ERROR = [
     # 0
     "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok}"
-    "не имеет основного вида оплаты {main_vidop}",
+    "\nне имеет основного вида оплаты {main_vidop}",
     # 1
     "Вид оплаты {vidop}, дата начала {datan}, дата окончания {datok}"
-    "имеет больше одного основного вида оплаты {main_vidop}",
+    "\nимеет больше одного основного вида оплаты {main_vidop}",
     # 2
-    "Вид оплаты {vidop}. Сумма или ранее вычисленная сумма у надбавки\n"
-    "не преобразуется в число с плавающей запятой {summa_1} {summa_2}",
+    "Вид оплаты {vidop}. Сумма или ранее вычисленная сумма у надбавки"
+    "\nне преобразуется в число с плавающей запятой {summa_1} {summa_2}",
     # 3
     "Ошибка в программе."
     "\nВ PRIMARY_SECONDARY_PAYCODES дублируются следующие коды secondary {codes}."
@@ -102,12 +102,12 @@ TEXT_ERROR = [
     # 4 — текст не менять, соответствует SERVICE_TEXT в лог-обработчиках
     "Необработанный вид оплаты {service_text} {vidop}",
     # 5
-    "Виды операций, не обработанные программой {vidops}.\n"
-    "Возможно не заданы в PRIMARY_SECONDARY_PAYCODES",
+    "Виды операций, не обработанные программой {vidops}."
+    "\nВозможно не заданы в PRIMARY_SECONDARY_PAYCODES",
     # 6
-    "При выполнении программы были зафиксированы ошибки.\n" "Подробности в log файле.",
+    "При выполнении программы были зафиксированы ошибки." "\nПодробности в log файле.",
     # 7
-    "Программа завершена пользователем"
+    "Программа завершена пользователем",
     # 8
     "Указан неверный путь на файл вывода операторов SQL {out_path} или к нему нет доступа.\n{ex}",
 ]
@@ -182,7 +182,7 @@ class Uchrabvr:
 
         Действия:
             * создаётся ConfigParser и словарь parameters;
-            * Common(config, parameters) читает uchrabvr_.cfg или задаёт значения по умолчанию;
+            * Common(config, parameters) читает uchrabvr.cfg или задаёт значения по умолчанию;
             * метод fill_in_parameters() возвращает код (0 — успех, 1 — предупреждение);
             * добавляется служебный текст, используемый при журнализации.
 
@@ -333,9 +333,7 @@ class Uchrabvr:
         uchrabvr = self.person_uchrabvr[num_in_person_uchrabvr]
         self.add_vidops_to_processed_vidops(uchrabvr.vidop, secondary_uchrabvr.vidop)
 
-        # Добавляем vidop в список обработанных vidop
-
-        # Прибавить `summaval` вторичной строки к `summa` найденной основной.
+        # Прибавляем `summaval` вторичной строки к `summa` найденной основной.
         try:
             summa = self.common.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
         except ValueError:
@@ -377,11 +375,8 @@ class Uchrabvr:
         """Валидация констант и входных данных"""
         codes = self.validate_unique_secondary_codes(PRIMARY_SECONDARY_PAYCODES)
         if codes:
-            self.common.error(
-                "-----",
-                TEXT_ERROR[3].format(codes=codes),
-            )
-            exit(1)
+            self.common.error("-----", TEXT_ERROR[3].format(codes=codes))
+            raise ValueError
 
     @staticmethod
     def validate_unique_secondary_codes(
@@ -393,18 +388,18 @@ class Uchrabvr:
         :return: Список дублирующихся кодов
         """
         all_codes: list[str] = []
-        dublicate_codes: list[str] = []
+        duplicate_codes: list[str] = []
         for row in variable_vidops:
             secondary = (
                 (row.secondary,) if isinstance(row.secondary, str) else row.secondary
             )
             for code in secondary:
                 if code in all_codes:
-                    dublicate_codes.append(code)
+                    duplicate_codes.append(code)
                 else:
                     all_codes.append(code)
 
-        return dublicate_codes
+        return duplicate_codes
 
     # ==== Сервис ==============================================
     def output_result(self) -> list[str]:
@@ -437,30 +432,7 @@ class Uchrabvr:
 
 
 if __name__ == "__main__":
-    # Точка входа CLI: создаём объект, запускаем обработку, пишем результат.
-    uchrabvr_ = Uchrabvr()
-    try:
-        uchrabvr_.start()
-    except KeyboardInterrupt:
-        uchrabvr_.common.error("-----", TEXT_ERROR[7], logging.CRITICAL)
-        raise
-    except (FileNotFoundError, PermissionError, ValueError) as error:
-        sys.exit(1)
+    # Делегируем в CLI-обёртку.
+    from SRC.uchrabvr_cli import main
 
-    uchrabvr_.stop()
-
-    out_path = Path(uchrabvr_.parameters["output_file_path"])
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(out_path, "w", encoding="cp866", newline="\r\n") as f_:
-            f_.write("\n".join(uchrabvr_.output_result()))
-    except (FileNotFoundError, PermissionError) as ex:
-        uchrabvr_.common.error("-----", TEXT_ERROR[8], logging.CRITICAL)
-        uchrabvr_.return_code = 1
-
-    if uchrabvr_.return_code:
-        uchrabvr_.common.error("-----", TEXT_ERROR[6], logging.CRITICAL)
-
-    logging.shutdown()
-    sys.exit(uchrabvr_.return_code)
+    main()

@@ -14,7 +14,7 @@ from pathlib import Path
 import logging
 import csv
 from configparser import ConfigParser
-from decimal import Decimal, ROUND_HALF_EVEN, getcontext
+from decimal import Decimal, ROUND_HALF_EVEN, getcontext, InvalidOperation
 
 # Точность вычислений decimal
 getcontext().prec = 28
@@ -156,6 +156,9 @@ class Common:
         Суммирует две суммы в строковом представлении и округляет до копеек
         по банковскому правилу ROUND_HALF_EVEN.
         """
-        # При желании можно добавить try/except с логированием неверного формата.
-        s_decimal = Decimal(s1) + Decimal(s2)
+        try:
+            s_decimal = Decimal(s1) + Decimal(s2)
+        except InvalidOperation:
+            raise ValueError
+
         return str(s_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN))

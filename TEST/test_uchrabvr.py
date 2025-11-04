@@ -1,11 +1,9 @@
-import sys, pathlib
+import sys
 import runpy
 import builtins
 from pathlib import Path
 
-sys.path.insert(
-    0, str(pathlib.Path(__file__).resolve().parent.parent)
-)  # -> C:\2_otpusk
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # -> C:\2_otpusk
 
 import logging
 import pytest
@@ -204,6 +202,9 @@ def test_ambiguous_primary_for_single_secondary_sets_error(
 
     with caplog.at_level(logging.ERROR):
         uchrabvr_obj.start()
+
+    assert uchrabvr_obj.return_code == 1
+    assert "имеет больше одного основного вида оплаты" in caplog.text
 
 
 def test_cli_main_write_failure_sets_return_code_and_exits_1(monkeypatch, tmp_path):
