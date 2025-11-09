@@ -70,14 +70,10 @@ class Common:
 
     def __init__(
         self,
-        config_file_path: str,
         parameters: dict[str, Any],
-        required_parameters: dict[str, RequiredParameter],
     ) -> None:
         self.config = ConfigParser(interpolation=None)
-        self.config_file_path = config_file_path
         self.parameters = parameters
-        self.required_parameters = required_parameters
         self.tune_logger: TuneLogger | None = None
 
     @staticmethod
@@ -105,7 +101,9 @@ class Common:
             )
             raise
 
-    def fill_in_parameters(self) -> int:
+    def fill_in_parameters(
+        self, config_file_path: str, required_parameters: dict[str, RequiredParameter]
+    ) -> int:
         """
         Загрузить настройки из CFG и заполнить `self.parameters` строковыми значениями.
 
@@ -113,25 +111,25 @@ class Common:
             0 — если файл прочитан успешно;
             1 — если файла нет (использованы значения по умолчанию).
         """
-        cfg_path = Path(self.config_file_path)
+        cfg_path = Path(config_file_path)
 
         if not cfg_path.exists():
             # Сообщаем и продолжаем с дефолтами
             self.error(
                 "-----",
-                MSG_CFG_NOT_FOUND.format(config_file=self.config_file_path),
+                MSG_CFG_NOT_FOUND.format(config_file=config_file_path),
                 level_log=logging.WARNING,
             )
             # заполняем дефолты
-            for name, req in self.required_parameters.items():
+            for name, req in required_parameters.items():
                 self.parameters[name] = req.default_value
             return 1
 
-        # Читаем в self.config (исправляет исходную ошибку)
-        self.config.read(self.config_file_path, encoding="utf-8")
+        # Читаем в self.config
+        self.config.read(config_file_path, encoding="utf-8")
 
         # Переносим значения (или дефолты) в parameters
-        for name, req in self.required_parameters.items():
+        for name, req in required_parameters.items():
             self.from_cfg_to_param(name, req.section_name, req.default_value)
 
         return 0
@@ -151,14 +149,21 @@ class Common:
         value = self.config.get(section, name_parameter, fallback=default)
         self.parameters[name_parameter] = str(value)
 
-    def sum_str(self, s1: str, s2: str) -> str:
+    @staticmethod
+    def sum_str(s1: str, s2: str) -> str:
         """
         Суммирует две суммы в строковом представлении и округляет до копеек
         по банковскому правилу ROUND_HALF_EVEN.
         """
+        if not (isinstance(s1, str) and isinstance(s2, str)):
+            raise ValueError
         try:
             s_decimal = Decimal(s1) + Decimal(s2)
         except InvalidOperation:
             raise ValueError
 
         return str(s_decimal.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN))
+
+    @staticmethod
+    def normalize_tuple_str(tuple_str: str) -> tuple[str, ...]:
+        return (tuple_str,) if isinstance(tuple_str, str) else tuple(tuple_str)

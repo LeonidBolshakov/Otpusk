@@ -29,8 +29,6 @@
 
 from typing import NamedTuple, Iterable
 from collections import defaultdict
-from pathlib import Path
-import sys
 import logging
 
 from SRC.common import (
@@ -191,8 +189,10 @@ class Uchrabvr:
         """
 
         self.parameters = {}
-        self.common = Common(CONFIG_FILE_PATH, self.parameters, REQUIRED_PARAMETERS)
-        self.return_code = self.common.fill_in_parameters()
+        self.common = Common(self.parameters)
+        self.return_code = self.common.fill_in_parameters(
+            CONFIG_FILE_PATH, REQUIRED_PARAMETERS
+        )
         # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger для фильтрации/аккумуляции.
         self.parameters["service_text"] = SERVICE_TEXT
 
@@ -302,7 +302,7 @@ class Uchrabvr:
             self.return_code = 1
             return
 
-        # Ровно одна основная строка — обновляем её сумму
+        # Ровно одна основная — обновляем её сумму
         self.update_primary_uchrabvr(nums_in_person_uchrabvr[0], uchrabvr)
 
     def find_uchrabvr(
@@ -313,9 +313,7 @@ class Uchrabvr:
     ) -> list[int]:
         """Найти индексы строк с vidop и совпадающими датами"""
         # Нормализация primary_vidops
-        primary_vidops = (
-            (primary_vidops,) if isinstance(primary_vidops, str) else primary_vidops
-        )
+        primary_vidops = self.common.normalize_tuple_str(primary_vidops)
 
         # Основной блок
         nums_in_person_uchrabvr: list[int] = []
@@ -362,8 +360,7 @@ class Uchrabvr:
         self, row: UchrabvrStructure, num_error: int, main_vidop: str | tuple[str, ...]
     ) -> str:
         """Собрать сообщение об ошибке по шаблону."""
-        if isinstance(main_vidop, str):
-            main_vidop = (main_vidop,)
+        main_vidop = self.common.normalize_tuple_str(main_vidop)
         return TEXT_ERROR[num_error].format(
             vidop=row.vidop,
             datan=row.datan,
@@ -378,8 +375,8 @@ class Uchrabvr:
             self.common.error("-----", TEXT_ERROR[3].format(codes=codes))
             raise ValueError
 
-    @staticmethod
     def validate_unique_secondary_codes(
+        self,
         variable_vidops: Iterable[PrimarySecondaryCodes],
     ) -> list[str]:
         """
@@ -387,17 +384,16 @@ class Uchrabvr:
         :param variable_vidops: PRIMARY_SECONDARY_PAYCODES
         :return: Список дублирующихся кодов
         """
-        all_codes: list[str] = []
+        all_codes = set()
         duplicate_codes: list[str] = []
         for row in variable_vidops:
-            secondary = (
-                (row.secondary,) if isinstance(row.secondary, str) else row.secondary
-            )
-            for code in secondary:
+            primary = self.common.normalize_tuple_str(row.primary)
+            secondary = self.common.normalize_tuple_str(row.secondary)
+            for code in primary + secondary:
                 if code in all_codes:
                     duplicate_codes.append(code)
                 else:
-                    all_codes.append(code)
+                    all_codes.add(code)
 
         return duplicate_codes
 

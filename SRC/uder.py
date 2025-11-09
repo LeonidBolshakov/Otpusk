@@ -14,6 +14,7 @@
 """
 
 from configparser import ConfigParser
+from logging import setLogRecordFactory
 from typing import Iterable
 from dataclasses import dataclass, asdict
 import logging
@@ -25,18 +26,34 @@ from SRC.common import (
     RequiredParameter,
 )
 
-
 # fmt: off
+VIDOPS_OF_TAX           = ("13", "182")
+CONFIG_FILE_PATH        = "uder.cfg"
+
+REQUIRED_PARAMETERS     : dict[str, RequiredParameter] = {
+    "level_console"     : RequiredParameter("LOG", "CRITICAL"),
+    "level_file"        : RequiredParameter("LOG", "INFO"),
+    "file_log_path"     : RequiredParameter("FILES", "uder.log"),
+    "input_file_uder"   : RequiredParameter("FILES", "UDER.txt"),
+    "last_mount"        : RequiredParameter("LIMITS", "6"),
+    "log_format"        : RequiredParameter("LOG", "%(message)s"),
+}
+
+
 @dataclass(frozen=True, slots=True)
 class UderStructure:
-    nrec            : str
-    tabn            : str
-    mes             : str
-    vidud           : str
-    sumud           : str
-    clsch           : str
-    datav           : str
-    vidoplud        : str
+    """Строка входных данных UDER.txt (одна строка удержания).
+
+    Поля соответствуют колонкам входного файла:
+    """
+    nrec                : str # идентификатор записи
+    tabn                : str # табельный номер сотрудника
+    mes                 : str # месяц начисления (как строка, может быть '7', '11', '')
+    vidud               : str # код вида удержания
+    sumud               : str # сумма удержания (строкой; суммируется как десятичная)
+    clsch               : str # NREC сотрудника, по нему группируем «персону»
+    datav               : str # дата выплаты
+    vidoplud            : str # код вида оплаты (если присутствует)
 
 
 # fmt: on
@@ -44,20 +61,9 @@ class UderStructure:
 
 @dataclass(frozen=True, slots=True)
 class UderGrouped(UderStructure):
+    """Модификация записи удержания с добавленным ключом группировки по месяцу."""
+
     group_vidud: str
-
-
-VIDOPS_OF_TAX = ("13", "182")
-CONFIG_FILE_PATH = "uder.cfg"
-
-REQUIRED_PARAMETERS: dict[str, RequiredParameter] = {
-    "level_console": RequiredParameter("LOG", "CRITICAL"),
-    "level_file": RequiredParameter("LOG", "INFO"),
-    "file_log_path": RequiredParameter("FILES", "uder.log"),
-    "input_file_uder": RequiredParameter("FILES", "UDER.txt"),
-    "last_mount": RequiredParameter("LIMITS", "6"),
-    "log_format": RequiredParameter("LOG", "%(message)s"),
-}
 
 
 class Uder:
@@ -69,7 +75,7 @@ class Uder:
         self.person_uders: list[UderStructure] = []
 
         # 1. Инициализация общих компонентов
-        self.common = Common(CONFIG_FILE_PATH, self.parameters, REQUIRED_PARAMETERS)
+        self.common = Common(self.parameters)
 
         # 2. Загрузка и валидация параметров
         self.return_code = self._init_parameters()
@@ -81,9 +87,11 @@ class Uder:
         self._normalize_data()
 
     def _init_parameters(self) -> int:
-        return self.common.fill_in_parameters()
+        """Считывает и валидирует параметры из конфигурации в self.parameters."""
+        return self.common.fill_in_parameters(CONFIG_FILE_PATH, REQUIRED_PARAMETERS)
 
     def _init_logging(self) -> None:
+        """Инициализирует логирование (консоль/файл) согласно параметрам."""
         self.common.init_logging()
 
     def _normalize_data(self) -> None:
@@ -96,6 +104,7 @@ class Uder:
         )
 
     def start(self) -> None:
+        """Главный цикл: читает UDER.txt, накапливает удержания по сотруднику и обрабатывает группы."""
         file_uder = self.parameters["input_file_uder"]
         all_uders: Iterable[UderStructure] = (
             row for row in self.common.input_table(file_uder, UderStructure)
@@ -106,7 +115,7 @@ class Uder:
         )
         current_clsch = None
         for uder in all_uders:
-            # смена сотрудника → обработать накопленную группу (если она не пуста)
+            # Смена сотрудника → сначала обработать накопленную группу (если она не пуста).
             if current_clsch is None:
                 current_clsch = uder.clsch
 
@@ -117,10 +126,11 @@ class Uder:
 
             self.person_uders.append(uder)
 
-        # обработать «хвост»
+        # # Обработать «хвост» — накопленные записи последнего сотрудника.
         self.processing_person()
 
     def processing_person(self):
+        """Фильтрует и сортирует записи по группам месяцов и валидирует их суммы."""
         filtered_uders = self.filter_sort_by_group()
         self.validate_person_groups(filtered_uders)
 
@@ -141,17 +151,11 @@ class Uder:
         return normalize_mount
 
     def normalize_codes(self, codes: PrimarySecondaryCodes) -> PrimarySecondaryCodes:
-
+        """Нормализует набор кодов: гарантирует, что primary/secondary представлены как кортежи строк."""
         return PrimarySecondaryCodes(
-            primary=self.to_tuple(codes.primary),
-            secondary=self.to_tuple(codes.secondary),
+            primary=self.common.normalize_tuple_str(codes.primary),
+            secondary=self.common.normalize_tuple_str(codes.secondary),
         )
-
-    @staticmethod
-    def to_tuple(value: str | tuple[str, ...]) -> tuple[str, ...]:
-        if isinstance(value, str):
-            return (value,)
-        return value
 
     def normalize_mount(self, mount: str) -> str:
         """
@@ -164,6 +168,7 @@ class Uder:
         return mount[0:2]
 
     def filter_sort_by_group(self) -> list[UderGrouped]:
+        """Отбирает удержания, для которых есть ключ группы, и сортирует их по месяцу (group_vidud)."""
         filtered_uders: list[UderGrouped] = []
         for uder in self.person_uders:
             group_key = self.create_group_key(uder)
@@ -176,6 +181,7 @@ class Uder:
         return filtered_uders
 
     def check_summa(self, summa: str, uder: UderGrouped | None) -> None:
+        """Логирует ненулевую сумму для группы (месяца) конкретного сотрудника."""
         if uder is None:
             return
         if summa != "0.00":

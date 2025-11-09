@@ -70,7 +70,7 @@ def test_grouping_and_info_logged(monkeypatch, caplog, uder_obj):
     assert any("Разница сумм налогов" in m and "; 10.00" in m for m in messages)
 
 
-def test_filter_sort_by_group(monkeypatch, uder_obj):
+def test_filter_sort_by_group(uder_obj):
     clsch = "E"
     uder_obj.person_uders = [
         UderStructure(

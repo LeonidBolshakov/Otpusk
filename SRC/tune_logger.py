@@ -21,6 +21,7 @@ from SRC.accumulatevidops import AccumulateVidops
 from SRC.filterhandler import FilteringHandler
 
 logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 # fmt: off
 LEVEL_STR_TO_INT = {
@@ -46,14 +47,12 @@ class HandlerLogger(Enum):
 class TuneLogger:
     def __init__(self, parameters: dict[str, Any]):
 
-        # 1) Разбор параметров с нормализацией
-        self.log_level_console = self.level_str_int(
-            self._normalize_level(parameters["level_console"])
-        )
-        self.log_level_file = self.level_str_int(
-            self._normalize_level(parameters["level_file"])
-        )
-        self.service_text = parameters.get("service_text", "")
+        # 1) Разбор параметров
+        self.log_level_console = self.level_str_int(parameters["level_console"])
+        self.log_level_file = self.level_str_int(parameters["level_file"])
+        self.service_text = parameters.get(
+            "service_text", ""
+        )  # Служебный текст. Для программы
         self.log_format = parameters["log_format"].strip()
 
         self.file_log_path = parameters["file_log_path"].strip()
@@ -103,7 +102,7 @@ class TuneLogger:
         self.configure_root_handlers(handlers)
 
     def create_file_handler(self, file_log_path: str) -> logging.FileHandler:
-        # ? Режим "w": файл лога перезаписывается при каждом запуске; encoding без BOM
+        # Режим "w": файл лога перезаписывается при каждом запуске; encoding без BOM
         return logging.FileHandler(
             filename=Path(file_log_path), mode="w", encoding="utf-8", delay=True
         )
@@ -144,7 +143,10 @@ class TuneLogger:
         :param level_default: Значение по умолчанию (целое) применяемое, при ошибочном level_str
         :return: Чисорвое представление уровня логирования (целое)
         """
-        # поддержим числа и строки
+
+        # Нормализуем параметр
+        level_str = self._normalize_level(level_str)
+
         if not level_str:
             return level_default
 
@@ -155,18 +157,13 @@ class TuneLogger:
 
         # Мнемоника (INFO, DEBUG...)
         level_int = LEVEL_STR_TO_INT.get(str(level_str).upper())
-        if level_int is not None:
+        if level_int:
             return level_int
 
         # Параметр задан неверно
-        msg = (
+        logging.warning(
             f"Неизвестный уровень логирования: {level_str!r}; применяю {level_default}"
         )
-        root = logging.getLogger()
-        if root.hasHandlers():
-            root.warning(msg)
-        else:
-            print(msg, file=sys.stderr)
         return level_default
 
     @staticmethod
