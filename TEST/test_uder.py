@@ -8,13 +8,14 @@ import logging
 import pytest
 
 from SRC.uder import Uder, UderStructure
+import SRC.common as common
 
 
 @pytest.fixture
 def uder_obj(tmp_path):
     obj = Uder()
-    obj.parameters["file_log_path"] = str(tmp_path / "uder.log")
-    obj.common.init_logging()
+    obj.parameters_dict["file_log_path"] = str(tmp_path / "uder.log")
+    common.init_logging(obj.parameters_dict)
     return obj
 
 
@@ -27,7 +28,8 @@ def test_normalize_mount():
 
 
 def test_grouping_and_info_logged(monkeypatch, caplog, uder_obj):
-    clsch = "EMP1"
+    clsch_1 = "EMP1"
+    clsch_2 = "EMP2"
     rows = [
         UderStructure(
             nrec="1",
@@ -35,7 +37,7 @@ def test_grouping_and_info_logged(monkeypatch, caplog, uder_obj):
             mes="5",
             vidud="13",
             sumud="100.00",
-            clsch=clsch,
+            clsch=clsch_1,
             datav="2025-05-31",
             vidoplud="X",
         ),
@@ -45,7 +47,7 @@ def test_grouping_and_info_logged(monkeypatch, caplog, uder_obj):
             mes="05",
             vidud="13",
             sumud="-90.00",
-            clsch=clsch,
+            clsch=clsch_1,
             datav="2025-05-31",
             vidoplud="X",
         ),
@@ -54,15 +56,23 @@ def test_grouping_and_info_logged(monkeypatch, caplog, uder_obj):
             tabn="001",
             mes="7",
             vidud="13",
+            sumud="321.89",
+            clsch=clsch_2,
+            datav="2025-07-31",
+            vidoplud="X",
+        ),
+        UderStructure(
+            nrec="3",
+            tabn="001",
+            mes="7",
+            vidud="13",
             sumud="999.00",
-            clsch=clsch,
+            clsch=clsch_1,
             datav="2025-07-31",
             vidoplud="X",
         ),
     ]
-    monkeypatch.setattr(
-        uder_obj.common, "input_table", lambda file, Table: (r for r in rows)
-    )
+    monkeypatch.setattr(common, "input_table", lambda file, Table: (r for r in rows))
     with caplog.at_level(logging.INFO):
         uder_obj.start()
 

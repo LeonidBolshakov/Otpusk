@@ -6,6 +6,7 @@ from SRC.common import (
     PRIMARY_SECONDARY_PAYCODES,
     PrimarySecondaryCodes,
 )
+import SRC.common as common
 
 # fmt: off
 uchrabvr_structure = UchrabvrStructure(
@@ -32,7 +33,7 @@ def uchrabvr_obj(monkeypatch: pytest.MonkeyPatch) -> Uchrabvr:
     obj = Uchrabvr()
 
     monkeypatch.setattr("builtins.input", lambda _: "")
-    monkeypatch.setattr(obj.common, "input_table", input_from_buffer)
+    monkeypatch.setattr(common, "input_table", input_from_buffer)
     obj.buffer = []
     return obj
 

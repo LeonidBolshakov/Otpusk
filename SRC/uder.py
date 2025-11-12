@@ -10,21 +10,21 @@
     * `uder.cfg` (или значения по умолчанию `REQUIRED_PARAMETERS`).
 
 Логирование:
-    * настраивается через `Common.init_logging()`/`TuneLogger`.
+    * настраивается через `Parameters.init_logging()`/`TuneLogger`.
 """
 
 from configparser import ConfigParser
-from logging import setLogRecordFactory
 from typing import Iterable
 from dataclasses import dataclass, asdict
 import logging
 
 from SRC.common import (
-    Common,
     PRIMARY_SECONDARY_PAYCODES,
     PrimarySecondaryCodes,
-    RequiredParameter,
 )
+import SRC.common as common
+
+from SRC.parameters import Parameters, RequiredParameter
 
 # fmt: off
 VIDOPS_OF_TAX           = ("13", "182")
@@ -71,33 +71,31 @@ class Uder:
 
     def __init__(self) -> None:
         self.config = ConfigParser()
-        self.parameters: dict[str, str] = {}
+        self.parameters_dict: dict[str, str] = {}
         self.person_uders: list[UderStructure] = []
 
-        # 1. Инициализация общих компонентов
-        self.common = Common(self.parameters)
+        # 1. Загрузка и валидация параметров
+        parameters = Parameters(
+            parameters=self.parameters_dict,
+            config_file_path=CONFIG_FILE_PATH,
+            required_parameters=REQUIRED_PARAMETERS,
+        )
+        self.return_code = parameters.get_return_code()
 
-        # 2. Загрузка и валидация параметров
-        self.return_code = self._init_parameters()
-
-        # 3. Настройка логирования
+        # 2. Настройка логирования
         self._init_logging()
 
-        # 4. Подготовка нормализованных данных
+        # 3. Подготовка нормализованных данных
         self._normalize_data()
-
-    def _init_parameters(self) -> int:
-        """Считывает и валидирует параметры из конфигурации в self.parameters."""
-        return self.common.fill_in_parameters(CONFIG_FILE_PATH, REQUIRED_PARAMETERS)
 
     def _init_logging(self) -> None:
         """Инициализирует логирование (консоль/файл) согласно параметрам."""
-        self.common.init_logging()
+        common.init_logging(self.parameters_dict)
 
     def _normalize_data(self) -> None:
         """Кэширует таблицу соответствий PRIMARY_SECONDARY_PAYCODES в виде кортежей строк."""
         self.normalize_last_mount = self.normalize_mount(
-            self.parameters.get("last_mount", "")
+            self.parameters_dict.get("last_mount", "")
         )
         self.normalized_variable_vidops = tuple(
             self.normalize_codes(row) for row in PRIMARY_SECONDARY_PAYCODES
@@ -105,9 +103,9 @@ class Uder:
 
     def start(self) -> None:
         """Главный цикл: читает UDER.txt, накапливает удержания по сотруднику и обрабатывает группы."""
-        file_uder = self.parameters["input_file_uder"]
+        file_uder = self.parameters_dict["input_file_uder"]
         all_uders: Iterable[UderStructure] = (
-            row for row in self.common.input_table(file_uder, UderStructure)
+            row for row in common.input_table(file_uder, UderStructure)
         )
 
         logging.error(
@@ -153,8 +151,8 @@ class Uder:
     def normalize_codes(self, codes: PrimarySecondaryCodes) -> PrimarySecondaryCodes:
         """Нормализует набор кодов: гарантирует, что primary/secondary представлены как кортежи строк."""
         return PrimarySecondaryCodes(
-            primary=self.common.normalize_tuple_str(codes.primary),
-            secondary=self.common.normalize_tuple_str(codes.secondary),
+            primary=common.normalize_tuple_str(codes.primary),
+            secondary=common.normalize_tuple_str(codes.secondary),
         )
 
     def normalize_mount(self, mount: str) -> str:
@@ -207,7 +205,7 @@ class Uder:
                 self.check_summa(summa, filtered_uders[i_uder - 1])
                 summa = "0.00"
                 current_group = uder.group_vidud
-            summa = self.common.sum_str(summa, uder.sumud)
+            summa = common.sum_str(summa, uder.sumud)
 
         if len(filtered_uders) != 0:
             self.check_summa(summa, filtered_uders[-1])

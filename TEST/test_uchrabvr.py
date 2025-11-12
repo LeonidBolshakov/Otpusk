@@ -7,12 +7,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # -> C:\2_otpus
 
 import logging
 import pytest
+import builtins, runpy
+from pathlib import Path
 
+import SRC.uchrabvr as mod
 from SRC.uchrabvr import (
     Uchrabvr,
     UchrabvrStructure,
 )
 from SRC.common import PRIMARY_SECONDARY_PAYCODES, PrimarySecondaryCodes
+import SRC.common as common
 
 
 @pytest.fixture
@@ -21,8 +25,8 @@ def uchrabvr_obj(monkeypatch, tmp_path):
     monkeypatch.setattr(Uchrabvr, "service_warning", lambda self: None)
     obj = Uchrabvr()
     # Безопасный путь к временному журналу
-    obj.parameters["file_log_path"] = str(tmp_path / "uchrabvr.log")
-    obj.common.init_logging()
+    obj.parameters_dict["file_log_path"] = str(tmp_path / "uchrabvr.log")
+    common.init_logging(obj.parameters_dict)
     return obj
 
 
@@ -104,7 +108,7 @@ def test_processing_updates_primary_and_generates_sql(
         return (r for r in rows)
 
     rows = _rows_for_update()
-    monkeypatch.setattr(uchrabvr_obj.common, "input_table", _fake_input_table)
+    monkeypatch.setattr(common, "input_table", _fake_input_table)
 
     with caplog.at_level(logging.DEBUG):
         uchrabvr_obj.start()
@@ -137,7 +141,7 @@ def test_error_when_no_primary_found(monkeypatch, uchrabvr_obj):
         )
     ]
     monkeypatch.setattr(
-        uchrabvr_obj.common,
+        common,
         "input_table",
         lambda file, Table: (r for r in only_secondary),
     )
@@ -196,9 +200,7 @@ def test_ambiguous_primary_for_single_secondary_sets_error(
     ]
 
     # подменяем источник данных; сигнатуру глушим универсально
-    monkeypatch.setattr(
-        uchrabvr_obj.common, "input_table", lambda *a, **k: (r for r in rows)
-    )
+    monkeypatch.setattr(common, "input_table", lambda *a, **k: (r for r in rows))
 
     with caplog.at_level(logging.ERROR):
         uchrabvr_obj.start()
@@ -207,64 +209,31 @@ def test_ambiguous_primary_for_single_secondary_sets_error(
     assert "имеет больше одного основного вида оплаты" in caplog.text
 
 
-def test_cli_main_write_failure_sets_return_code_and_exits_1(monkeypatch, tmp_path):
-    """
-    Ошибка записи файла (PermissionError) -> код выхода 1.
-    Глушим service_warning() и input(), чтобы не читать stdin.
-    """
-    import SRC.uchrabvr as mod
-
-    # не читаем stdin и не показываем предупреждения
-    monkeypatch.setattr(mod.Uchrabvr, "service_warning", lambda self: None)
+@pytest.mark.parametrize("exc", [PermissionError, FileNotFoundError])
+def test_cli_write_error_exits_1(monkeypatch, tmp_path, exc):
+    # не читаем stdin и не глушим реальный логгер
     monkeypatch.setattr(builtins, "input", lambda *a, **k: "")
-
-    # успешные start/stop
-    monkeypatch.setattr(mod.Uchrabvr, "start", lambda self: None)
-    monkeypatch.setattr(mod.Uchrabvr, "stop", lambda self: None)
-    # результат "на запись"
-    monkeypatch.setattr(
-        mod.Uchrabvr,
-        "output_result",
-        lambda self: ["UPDATE uchrabvr WHERE nrec=10 SET summa:=100.00;"],
-    )
-    # не трогаем реальное выключение логирования
     monkeypatch.setattr(mod.logging, "shutdown", lambda: None)
 
-    # перенастроим init, чтобы указать путь вывода внутрь tmp_path
+    # бизнес-методы ничего не делают, но «есть что писать»
+    monkeypatch.setattr(mod.Uchrabvr, "start", lambda self: None)
+    monkeypatch.setattr(mod.Uchrabvr, "stop", lambda self: None)
+    monkeypatch.setattr(mod.Uchrabvr, "output_result", lambda self: ["X"])
+
     real_init = mod.Uchrabvr.__init__
 
     def fake_init(self):
         real_init(self)
-        self.parameters["output_file_path"] = str(Path(tmp_path) / "out" / "result.sql")
+        self.parameters_dict["output_file_path"] = str(Path(tmp_path) / "out" / "r.sql")
 
     monkeypatch.setattr(mod.Uchrabvr, "__init__", fake_init)
 
-    # open() при записи бросает PermissionError
-    def fake_open(*a, **k):
-        raise PermissionError("no write")
+    # open() бросает нужное исключение
+    def _raise(*args, **kwargs):
+        raise FileNotFoundError("no write")
 
-    monkeypatch.setattr(builtins, "open", fake_open)
+    monkeypatch.setattr(builtins, "open", _raise)
 
     with pytest.raises(SystemExit) as se:
         runpy.run_module("SRC.uchrabvr", run_name="__main__")
-    assert se.value.code == 1
-
-    def fake_init(self):
-        real_init(self)
-        # перенаправляем вывод в тестовую папку
-        self.parameters["output_file_path"] = str(Path(tmp_path) / "out" / "result.sql")
-        return None
-
-    monkeypatch.setattr(mod.Uchrabvr, "__init__", fake_init)
-
-    # open() бросает PermissionError — эмулируем отказ записи
-    def fake_open(*a, **k):
-        raise PermissionError("no write")
-
-    monkeypatch.setattr(builtins, "open", fake_open)
-
-    with pytest.raises(SystemExit) as se:
-        # запустим модуль как скрипт
-        runpy.run_module("SRC.uchrabvr", run_name="__main__")
-
     assert se.value.code == 1

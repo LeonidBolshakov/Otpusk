@@ -31,12 +31,12 @@ from typing import NamedTuple, Iterable
 from collections import defaultdict
 import logging
 
+import SRC.common as common
 from SRC.common import (
-    Common,
-    RequiredParameter,
     PRIMARY_SECONDARY_PAYCODES,
     PrimarySecondaryCodes,
 )
+from SRC.parameters import Parameters, RequiredParameter
 
 
 # ==== Модели данных ===========================================================
@@ -147,7 +147,7 @@ class Uchrabvr:
         Инициализация разбита на независимые этапы:
           1. self._init_state()   — создание внутренних структур данных;
           2. self._init_config()  — загрузка параметров из конфигурации;
-          3. self.common.init_logging() — настройка подсистемы логирования.
+          3. common.init_logging() — настройка подсистемы логирования.
 
         Атрибут `return_code` используется для фиксации кода завершения программы
         (0 — успешное выполнение, 1 — были ошибки).
@@ -157,7 +157,7 @@ class Uchrabvr:
         self._init_config()
         self._init_validate()
         self._init_state()
-        self.common.init_logging()
+        self.tune_logger = common.init_logging(self.parameters_dict)
 
     def _init_state(self) -> None:
         """
@@ -175,26 +175,25 @@ class Uchrabvr:
 
     def _init_config(self) -> None:
         """
-        Загружает параметры из конфигурационного файла и
-        связывает общий класс Common с текущим объектом.
+        Создаёт словарь параметров из конфигурационного файла.
 
         Действия:
             * создаётся ConfigParser и словарь parameters;
-            * Common(config, parameters) читает uchrabvr.cfg или задаёт значения по умолчанию;
-            * метод fill_in_parameters() возвращает код (0 — успех, 1 — предупреждение);
-            * добавляется служебный текст, используемый при журнализации.
+            * Parameters(config, parameters) читает uchrabvr.cfg и, при необходимости, задаёт значения по умолчанию;
+            * добавляется служебный параметр, используемый при журнализации.
 
         Итог:
             self.parameters содержит пути к файлам, уровни логирования и прочие настройки.
         """
 
-        self.parameters = {}
-        self.common = Common(self.parameters)
-        self.return_code = self.common.fill_in_parameters(
-            CONFIG_FILE_PATH, REQUIRED_PARAMETERS
+        self.parameters_dict = {}
+        self.parameters = Parameters(
+            self.parameters_dict, CONFIG_FILE_PATH, REQUIRED_PARAMETERS
         )
+        self.return_code = self.parameters.get_return_code()
+
         # SERVICE_TEXT добавляется в параметры — его заберёт TuneLogger для фильтрации/аккумуляции.
-        self.parameters["service_text"] = SERVICE_TEXT
+        self.parameters_dict["service_text"] = SERVICE_TEXT
 
     # ==== Внешний цикл обработки ============================================
     def start(self) -> None:
@@ -204,10 +203,10 @@ class Uchrabvr:
         self.service_warning()
 
         # Создаём поток строк. Сбрасываем суммы в 0.00 на уровне потока
-        file_uchrabvr = self.parameters["input_file_uchrabvr"]
+        file_uchrabvr = self.parameters_dict["input_file_uchrabvr"]
         all_uchrabvr: Iterable[UchrabvrStructure] = (
             row._replace(summa=ZERO)
-            for row in self.common.input_table(file_uchrabvr, UchrabvrStructure)
+            for row in common.input_table(file_uchrabvr, UchrabvrStructure)
         )
 
         # Основной блок
@@ -259,13 +258,13 @@ class Uchrabvr:
         """Заносим в журнал необработанные строки сотрудника (служебный формат)."""
         for uchrabvr in self.person_uchrabvr:
             if uchrabvr.vidop not in self.processed_vidops:
-                self.common.error(
+                common.error(
                     "-----",
                     TEXT_ERROR[4].format(
                         service_text=SERVICE_TEXT, vidop=uchrabvr.vidop
                     ),
                 )
-                self.common.error(
+                common.error(
                     uchrabvr.tabn,
                     TEXT_ERROR[4].format(service_text="", vidop=uchrabvr.vidop),
                     logging.WARNING,
@@ -289,14 +288,14 @@ class Uchrabvr:
 
         if len(nums_in_person_uchrabvr) == 0:
             # Нет ни одного основного — ошибка
-            self.common.error(
+            common.error(
                 uchrabvr.tabn, self.prepare_string(uchrabvr, 0, primary_vidops)
             )
             self.return_code = 1
             return
         if len(nums_in_person_uchrabvr) > 1:
             # Несколько основных для одной вторичной строки — неоднозначность
-            self.common.error(
+            common.error(
                 uchrabvr.tabn, self.prepare_string(uchrabvr, 1, primary_vidops)
             )
             self.return_code = 1
@@ -313,7 +312,7 @@ class Uchrabvr:
     ) -> list[int]:
         """Найти индексы строк с vidop и совпадающими датами"""
         # Нормализация primary_vidops
-        primary_vidops = self.common.normalize_tuple_str(primary_vidops)
+        primary_vidops = common.normalize_tuple_str(primary_vidops)
 
         # Основной блок
         nums_in_person_uchrabvr: list[int] = []
@@ -327,15 +326,15 @@ class Uchrabvr:
     def update_primary_uchrabvr(
         self, num_in_person_uchrabvr: int, secondary_uchrabvr: UchrabvrStructure
     ) -> None:
-        """Прибавить `summaval` вторичной строки к `summa` найденной основной (Decimal через Common.sum_str)."""
+        """Прибавить `summaval` вторичной строки к `summa` найденной основной (Decimal через Parameters.sum_str)."""
         uchrabvr = self.person_uchrabvr[num_in_person_uchrabvr]
         self.add_vidops_to_processed_vidops(uchrabvr.vidop, secondary_uchrabvr.vidop)
 
         # Прибавляем `summaval` вторичной строки к `summa` найденной основной.
         try:
-            summa = self.common.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
+            summa = common.sum_str(uchrabvr.summa, secondary_uchrabvr.summaval)
         except ValueError:
-            self.common.error(
+            common.error(
                 secondary_uchrabvr.tabn,
                 TEXT_ERROR[2].format(
                     vidop=uchrabvr.vidop,
@@ -360,7 +359,7 @@ class Uchrabvr:
         self, row: UchrabvrStructure, num_error: int, main_vidop: str | tuple[str, ...]
     ) -> str:
         """Собрать сообщение об ошибке по шаблону."""
-        main_vidop = self.common.normalize_tuple_str(main_vidop)
+        main_vidop = common.normalize_tuple_str(main_vidop)
         return TEXT_ERROR[num_error].format(
             vidop=row.vidop,
             datan=row.datan,
@@ -372,7 +371,7 @@ class Uchrabvr:
         """Валидация констант и входных данных"""
         codes = self.validate_unique_secondary_codes(PRIMARY_SECONDARY_PAYCODES)
         if codes:
-            self.common.error("-----", TEXT_ERROR[3].format(codes=codes))
+            common.error("-----", TEXT_ERROR[3].format(codes=codes))
             raise ValueError
 
     def validate_unique_secondary_codes(
@@ -387,8 +386,8 @@ class Uchrabvr:
         all_codes = set()
         duplicate_codes: list[str] = []
         for row in variable_vidops:
-            primary = self.common.normalize_tuple_str(row.primary)
-            secondary = self.common.normalize_tuple_str(row.secondary)
+            primary = common.normalize_tuple_str(row.primary)
+            secondary = common.normalize_tuple_str(row.secondary)
             for code in primary + secondary:
                 if code in all_codes:
                     duplicate_codes.append(code)
@@ -419,9 +418,9 @@ class Uchrabvr:
 
     def stop(self) -> None:
         """Завершение работы: вывести неохваченные виды и закрыть логирование."""
-        accumulate_vidops = self.common.tune_logger.get_accumulated_vidops()
+        accumulate_vidops = self.tune_logger.get_accumulated_vidops()
         if accumulate_vidops:
-            self.common.error(
+            common.error(
                 "-----", TEXT_ERROR[5].format(vidops=", ".join(accumulate_vidops))
             )
         logging.critical("\nПрограмма закончила свою работу\n")

@@ -2,12 +2,8 @@ import pytest
 import logging
 
 from SRC.tune_logger import TuneLogger
-from SRC.uchrabvr import Uchrabvr, UchrabvrStructure, REQUIRED_PARAMETERS
-from SRC.common import (
-    PRIMARY_SECONDARY_PAYCODES,
-    PrimarySecondaryCodes,
-    RequiredParameter,
-)
+from SRC.uchrabvr import Uchrabvr, REQUIRED_PARAMETERS
+from SRC.parameters import RequiredParameter
 
 
 def test_level_str_int_error(caplog, monkeypatch):

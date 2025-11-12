@@ -4,7 +4,8 @@ from io import StringIO
 from typing import NamedTuple, Any
 from configparser import ConfigParser
 
-from SRC.common import Common, RequiredParameter
+from SRC.parameters import RequiredParameter, Parameters
+from SRC.common import error, input_table, sum_str
 
 
 class Rows(NamedTuple):
@@ -26,7 +27,7 @@ def test_error(
 ):
     logging.basicConfig(level=level_log_base)
     with caplog.at_level(level_log_base):
-        Common.error(tabn, message, level_log_message)
+        error(tabn, message, level_log_message)
     if is_log_message:
         assert str(message) in caplog.text
         assert str(tabn) in caplog.text
@@ -48,12 +49,12 @@ def test_input_table(monkeypatch):
     ]
     rows_string = "\n".join(",".join(row) for row in rows)
     monkeypatch.setattr("builtins.open", mock_open)
-    for i, row in enumerate(Common.input_table("Something", Rows)):
+    for i, row in enumerate(input_table("Something", Rows)):
         assert row == rows[i]
 
     monkeypatch.setattr("builtins.open", mock_file_not_found)
     with pytest.raises(FileNotFoundError):
-        list(Common.input_table("Something", Rows))
+        list(input_table("Something", Rows))
 
 
 def test_fill_in_parameters_no_cfg(tmp_path, caplog):
@@ -66,16 +67,16 @@ def test_fill_in_parameters_no_cfg(tmp_path, caplog):
         "param2": RequiredParameter(section_name="main", default_value="DEF2"),
     }
 
-    obj = Common(parameters=parameters)
-
     with caplog.at_level(logging.WARNING):
-        rc = obj.fill_in_parameters(
-            config_file_path=config_file_path, required_parameters=required_parameters
+        obj = Parameters(
+            parameters=parameters,
+            config_file_path=config_file_path,
+            required_parameters=required_parameters,
         )
 
     assert "не найден" in caplog.text
-    assert rc == 1
-    assert obj.parameters == {"param1": "DEF1", "param2": "DEF2"}
+    # assert obj.get_return_code() == 1
+    assert obj.get_parameters() == {"param1": "DEF1", "param2": "DEF2"}
 
 
 def test_fill_inparameters_exists_cfg(caplog, tmp_path):
@@ -95,7 +96,7 @@ def test_fill_inparameters_exists_cfg(caplog, tmp_path):
     with open(config_file_path, "w") as f:
         config.write(f)
 
-    # Формируем параметры для Common
+    # Формируем параметры для Parameters
     parameters: dict[str, Any] = {}
     required_parameters = {
         "host": RequiredParameter("server", "127.0.0.1"),
@@ -104,21 +105,18 @@ def test_fill_inparameters_exists_cfg(caplog, tmp_path):
         "retries": RequiredParameter("client", 5),
     }
 
-    # Объект класса Common
-    obj = Common(
-        parameters=parameters,
-    )
-
     # Выпоняем тестируемую функцию
     with caplog.at_level(logging.WARNING):
-        rc = obj.fill_in_parameters(
-            config_file_path=config_file_path, required_parameters=required_parameters
+        obj = Parameters(
+            parameters=parameters,
+            config_file_path=config_file_path,
+            required_parameters=required_parameters,
         )
 
     # Проверякм результаты выполнения
     assert caplog.text == ""
-    assert rc == 0
-    assert obj.parameters == {
+    assert obj.get_return_code() == 0
+    assert obj.get_parameters() == {
         "host": "localhost",
         "port": "8080",
         "timeout": "30",
@@ -138,6 +136,6 @@ def test_fill_inparameters_exists_cfg(caplog, tmp_path):
 def test_sum_str(s1, s2, expected_result):
     if expected_result == "error":
         with pytest.raises(ValueError):
-            Common.sum_str(s1, s2)
+            sum_str(s1, s2)
     else:
-        assert Common.sum_str(s1, s2) == expected_result
+        assert sum_str(s1, s2) == expected_result
